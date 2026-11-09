@@ -109,6 +109,11 @@ class PreparedImage:
     hybrid: bool
 
 
+def image_filesystems(header):
+    identifiers = {header[sector * 2048 + 1:sector * 2048 + 6] for sector in range(16, 32)}
+    return b"CD001" in identifiers, bool(identifiers & {b"NSR02", b"NSR03"})
+
+
 @contextmanager
 def prepare_image(path, expected="", cancel=None, progress=None):
     """Validate and size the *entire* decompressed image before opening a target.
@@ -135,7 +140,8 @@ def prepare_image(path, expected="", cancel=None, progress=None):
                 raise RufusError("The decompressed image is empty.")
             stream.seek(0)
             header = stream.read(65536)
-            is_iso = header[32769:32774] == b"CD001"
+            iso9660, udf = image_filesystems(header)
+            is_iso = iso9660 or udf
             hybrid = (header[510:512] == b"\x55\xaa" and
                       any(header[446 + 16 * i + 4] for i in range(4)))
             stream.seek(0)
@@ -156,6 +162,16 @@ def write_all(fd, data):
         written = os.write(fd, data)
         if written <= 0:
             raise RufusError("The destination stopped accepting data.")
+        data = data[written:]
+
+
+def write_at(fd, data, offset):
+    data = memoryview(data)
+    while data:
+        written = os.pwrite(fd, data, offset)
+        if written <= 0:
+            raise RufusError("The destination stopped accepting image metadata.")
+        offset += written
         data = data[written:]
 
 
@@ -259,7 +275,7 @@ def run_tool(args, cancel=None, *, stdin=None, stdout=None):
             raise RufusError(f"{Path(args[0]).name} failed: " + log.read().decode(errors="replace"))
 
 
-def validate_windows_tree(root):
+def validate_windows_tree(root, require_uefi=True):
     """Reject links, special files, FAT name collisions, and non-Windows ISOs."""
     files = []
     names = {}
@@ -279,30 +295,38 @@ def validate_windows_tree(root):
             names[key] = path
             if stat.S_ISREG(info.st_mode):
                 files.append((path, relative, info.st_size))
-    if not any(f"efi/boot/boot{arch}.efi" in names for arch in ("x64", "aa64", "ia32", "arm")):
+    if require_uefi and not any(f"efi/boot/boot{arch}.efi" in names for arch in ("x64", "aa64", "ia32", "arm")):
         raise RufusError("ISO has no UEFI removable-media bootloader in EFI/BOOT.")
     if "sources/boot.wim" not in names:
         raise RufusError("ISO is not Windows installation media (sources/boot.wim is missing).")
+    if not require_uefi and not {"bootmgr", "boot/bcd"} <= names.keys():
+        raise RufusError("BIOS Windows media requires bootmgr and boot/BCD in the ISO.")
     return files
 
 
-def stage_windows_iso(image, staging, cancel=None, progress=None):
+def stage_windows_iso(image, staging, cancel=None, progress=None, *, require_uefi=True, split_wim=True):
     import shutil
 
-    if not shutil.which("xorriso"):
-        raise RufusError("Windows ISO extraction requires xorriso: sudo apt install xorriso")
     with source_file(image) as stream:
-        stream.seek(32769)
-        if stream.read(5) != b"CD001":
+        iso9660, udf = image_filesystems(stream.read(65536))
+        if not (iso9660 or udf):
             raise RufusError("Select an uncompressed Windows installation ISO.")
     emit(progress, "Extracting Windows ISO")
-    run_tool(["xorriso", "-abort_on", "FAILURE", "-osirrox", "on", "-indev",
-              str(Path(image).resolve()), "-extract", "/", str(staging)], cancel)
-    files = validate_windows_tree(staging)
-    return ensure_fat32_files(staging, files, cancel, progress)
+    sevenzip = shutil.which("7zz") or shutil.which("7z")
+    if udf or not shutil.which("xorriso"):
+        if not sevenzip:
+            raise RufusError("This Windows ISO uses UDF and requires the 7zip package for extraction." if udf else
+                             "ISO extraction requires xorriso or 7zip.")
+        run_tool([sevenzip, "x", "-tudf" if udf else "-tiso", "-y", "-o" + str(staging), "--",
+                  str(Path(image).resolve())], cancel)
+    else:
+        run_tool(["xorriso", "-abort_on", "FAILURE", "-osirrox", "on", "-indev",
+                  str(Path(image).resolve()), "-extract", "/", str(staging)], cancel)
+    files = validate_windows_tree(staging, require_uefi)
+    return ensure_fat32_files(staging, files, cancel, progress, require_uefi=require_uefi) if split_wim else files
 
 
-def ensure_fat32_files(staging, files, cancel=None, progress=None, *, file_limit=FAT_MAX_FILE, part_size_mb=3800):
+def ensure_fat32_files(staging, files, cancel=None, progress=None, *, file_limit=FAT_MAX_FILE, part_size_mb=3800, require_uefi=True):
     """Split WIM resources before formatting; smaller limits allow bounded tests."""
     import shutil
 
@@ -322,7 +346,7 @@ def ensure_fat32_files(staging, files, cancel=None, progress=None, *, file_limit
         run_tool(["wimlib-imagex", "split", str(path), str(path.with_name("install.swm")),
                   str(part_size_mb), "--check"], cancel)
         path.unlink()
-    files = validate_windows_tree(staging)
+    files = validate_windows_tree(staging, require_uefi)
     if any(size > file_limit for _, _, size in files):
         raise RufusError("A staged file still exceeds FAT32's file size limit.")
     return files

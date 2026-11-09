@@ -10,7 +10,7 @@ import time
 
 from . import __version__
 from .core import Cancelled, HASH_ALGORITHMS, RufusError, checksums, human_size, write_to_file
-from .devices import (backup_device, discover_devices, format_device, windows_installer,
+from .devices import (backup_device, discover_devices, format_device, freedos_device, windows_installer,
                       write_to_device)
 from .windows import WindowsOptions, answer_file, prepare_windows
 
@@ -53,10 +53,15 @@ def parser():
     write.add_argument("--confirm", help="repeat the exact device path to authorize erasing it")
     write.add_argument("--sha256", default="", help="expected SHA-256 of the source/downloaded file")
     write.add_argument("--no-verify", action="store_true", help="skip read-back verification")
-    windows = commands.add_parser("windows", help="create a GPT/FAT32 UEFI Windows installer from an ISO")
+    windows = commands.add_parser("windows", help="create BIOS/UEFI Windows media with FAT32 or NTFS")
     windows.add_argument("image")
-    windows.add_argument("--device", required=True)
-    windows.add_argument("--confirm", required=True)
+    destination = windows.add_mutually_exclusive_group(required=True)
+    destination.add_argument("--device", help="USB drive to erase")
+    destination.add_argument("--output", help="NEW bootable image file, with no root or drive access")
+    windows.add_argument("--confirm", help="repeat the USB drive path to authorize erasing it")
+    windows.add_argument("--filesystem", choices=("fat32", "ntfs"), default="fat32")
+    windows.add_argument("--firmware", choices=("uefi", "bios"), default="uefi")
+    windows.add_argument("--size-mib", type=int, help="output image size; default automatically fits the installer")
     windows.add_argument("--sha256", default="")
     windows.add_argument("--no-verify", action="store_true")
     windows_arguments(windows)
@@ -75,6 +80,15 @@ def parser():
     backup.add_argument("--output", required=True, help="NEW destination filename; existing files are never overwritten")
     backup.add_argument("--format", choices=("raw", "vhd"), default="raw")
     backup.add_argument("--no-verify", action="store_true")
+    dos = commands.add_parser("freedos", help="create BIOS-bootable FreeDOS media from bundled Rufus files")
+    destination = dos.add_mutually_exclusive_group(required=True)
+    destination.add_argument("--output", help="NEW bootable image file; no drive or root access needed")
+    destination.add_argument("--device", help="USB drive to erase and make bootable")
+    dos.add_argument("--confirm", help="repeat the exact USB drive path to authorize erasing it")
+    dos.add_argument("--size-mib", type=int, help="image size; default 64 MiB for files or whole USB capacity")
+    dos.add_argument("--fat", type=int, choices=(16, 32), default=32)
+    dos.add_argument("--label", default="FREEDOS")
+    dos.add_argument("--no-verify", action="store_true")
     fmt = commands.add_parser("format", help="erase and format a USB drive with one partition")
     fmt.add_argument("--device", required=True)
     fmt.add_argument("--confirm", required=True)
@@ -144,9 +158,20 @@ def main(argv=None):
                                          not args.no_verify, cancel, progress)
             print(f"Image SHA-256: {result}")
         elif args.command == "windows":
-            result = windows_installer(args.image, select_device(args.device, args.confirm),
-                                       args.sha256, not args.no_verify, cancel, progress, windows_options(args))
-            print(f"Windows ISO SHA-256: {result}")
+            filesystem = "vfat" if args.filesystem == "fat32" else "ntfs"
+            if args.output:
+                from .media import create_windows_image
+                size = args.size_mib * 1024**2 if args.size_mib is not None else None
+                result = create_windows_image(args.image, args.output, size, filesystem, args.firmware,
+                                              windows_options(args), args.sha256, cancel, progress)
+                print(json.dumps(result, indent=2))
+            else:
+                if args.size_mib is not None:
+                    raise RufusError("--size-mib applies to --output images; USB media uses the drive's capacity.")
+                result = windows_installer(args.image, select_device(args.device, args.confirm),
+                                           args.sha256, not args.no_verify, cancel, progress, windows_options(args),
+                                           filesystem, args.firmware)
+                print(f"Windows ISO SHA-256: {result}")
         elif args.command == "prepare-windows":
             result = prepare_windows(args.image, args.output, windows_options(args), args.sha256, cancel, progress)
             print(json.dumps(result, indent=2))
@@ -165,6 +190,16 @@ def main(argv=None):
                 result = backup_device(select_device(args.device, destructive=False), args.output,
                                        args.format, not args.no_verify, cancel, progress)
             print(f"Backed-up disk SHA-256: {result}")
+        elif args.command == "freedos":
+            from .boot import MIB, create_freedos
+            if args.output:
+                size = (args.size_mib if args.size_mib is not None else 64) * MIB
+                result = create_freedos(args.output, size, args.fat, args.label, cancel, progress)
+            else:
+                size = args.size_mib * MIB if args.size_mib is not None else None
+                result = freedos_device(select_device(args.device, args.confirm), args.fat, args.label, size,
+                                        not args.no_verify, cancel, progress)
+            print(f"FreeDOS image SHA-256: {result}")
         elif args.command == "format":
             format_device(select_device(args.device, args.confirm), args.filesystem,
                           args.label, args.table, cancel, progress)

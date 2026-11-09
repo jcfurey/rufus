@@ -12,8 +12,7 @@ import subprocess
 import tempfile
 import time
 
-from .core import (RufusError, check_cancel, checksum, copy_windows_tree, emit,
-                   expected_sha256, prepare_image, stage_windows_iso, write_image)
+from .core import (RufusError, check_cancel, emit, expected_sha256, prepare_image, write_image)
 
 BLOCK = "org.freedesktop.UDisks2.Block"
 FILESYSTEM = "org.freedesktop.UDisks2.Filesystem"
@@ -32,10 +31,11 @@ class Device:
     nodes: tuple
     mounts: tuple
     reason: str = ""
+    logical_sector: int = 512
 
     @property
     def identity(self):
-        return self.path, self.size, self.model, self.serial, self.number
+        return self.path, self.size, self.model, self.serial, self.number, self.logical_sector
 
 
 def descendants(node):
@@ -62,13 +62,13 @@ def parse_devices(data):
             reason = "Drive contains a system, swap, or non-removable mount."
         devices.append(Device(disk["path"], int(disk["size"]), (disk.get("model") or "USB drive").strip(),
                               disk.get("serial") or "", disk["maj:min"],
-                              tuple(node["maj:min"] for node in nodes), mounts, reason))
+                              tuple(node["maj:min"] for node in nodes), mounts, reason, int(disk.get("log-sec") or 512)))
     return devices
 
 
 def discover_devices():
     result = subprocess.run(["lsblk", "--json", "--tree", "--bytes", "--output",
-                             "PATH,TYPE,SIZE,MODEL,SERIAL,TRAN,RM,RO,MOUNTPOINTS,MAJ:MIN"],
+                             "PATH,TYPE,SIZE,MODEL,SERIAL,TRAN,RM,RO,MOUNTPOINTS,MAJ:MIN,LOG-SEC"],
                             text=True, capture_output=True, check=False, timeout=15)
     if result.returncode:
         raise RufusError("Cannot enumerate block devices: " + result.stderr.strip())
@@ -286,51 +286,25 @@ def format_device(device, filesystem="vfat", label="RUFUS", table="gpt", cancel=
     emit(progress, "Complete", 1, 1)
 
 
-def windows_installer(source, device, expected="", verify=True, cancel=None, progress=None, options=None):
+def windows_installer(source, device, expected="", verify=True, cancel=None, progress=None, options=None,
+                      filesystem="vfat", firmware="uefi"):
+    from .media import create_windows_image, windows_partitions
+
     expected = expected_sha256(expected)
-    validate_format(device, "vfat", "WINDOWS", "gpt")
     guard(device, source)
+    if device.logical_sector != 512:
+        raise RufusError("Windows image creation currently requires a USB drive with 512-byte logical sectors.")
+    windows_partitions(device.size, filesystem, firmware)
     if options is not None:
         options.validate()
-    before = os.stat(source)
-    actual = checksum(source, cancel, progress)
-    if expected and actual != expected:
-        raise RufusError("Windows ISO SHA-256 does not match the expected checksum.")
-    # Extraction and WIM splitting must succeed before any destructive operation.
-    with tempfile.TemporaryDirectory(prefix="rufus-windows-") as staging:
-        guard(device, staging)
-        files = stage_windows_iso(source, Path(staging), cancel, progress)
-        if options is not None and options.enabled:
-            from .windows import apply_windows_options
-            files = apply_windows_options(Path(staging), options, cancel, progress)
-            if any(size > 2**32 - 1 for _, _, size in files):
-                raise RufusError("Customized Windows files exceed FAT32's file size limit.")
-        after = os.stat(source)
-        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
-                after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
-            raise RufusError("Windows ISO changed during extraction. Select a finished download and retry.")
-        required = sum(size + 32768 for _, _, size in files) + 64 * 1024 * 1024
-        if required > device.size:
-            raise RufusError("Windows installer files will not fit on this drive.")
-        check_cancel(cancel)
-        service = UDisks()
-        emit(progress, "Creating GPT and FAT32 installer partition")
-        partition = service.format(device, "vfat", "WINDOWS", "gpt", efi=True, source=source)
-        check_cancel(cancel)
+    # Build and validate everything as files before requesting device access.
+    with tempfile.TemporaryDirectory(prefix="rufus-windows-drive-") as directory:
+        guard(device, directory)
+        image = Path(directory) / "windows.img"
+        result = create_windows_image(source, image, device.size, filesystem, firmware, options, expected, cancel, progress)
         guard(device, source)
-        mounted = service.mount(partition)
-        try:
-            number = service.objects()[partition][BLOCK]["DeviceNumber"]
-            if os.stat(mounted).st_dev != number:
-                raise RufusError("Mounted destination does not match the new partition.")
-            if required > shutil.disk_usage(mounted).free:
-                raise RufusError("Not enough free space on the formatted installer partition.")
-            copy_windows_tree(files, mounted, verify, cancel, progress)
-        finally:
-            emit(progress, "Unmounting installer")
-            service.call(partition, FILESYSTEM, "Unmount", "(a{sv})", ({},))
-    emit(progress, "Complete", 1, 1)
-    return actual
+        write_to_device(image, device, result["sha256"], verify, cancel, progress)
+    return result["source_sha256"]
 
 
 def backup_device(device, output, image_format="raw", verify=True, cancel=None, progress=None):
@@ -365,3 +339,20 @@ def backup_device(device, output, image_format="raw", verify=True, cancel=None, 
         return save_image(fd, capacity, output, image_format, verify, cancel, progress)
     finally:
         os.close(fd)
+
+
+def freedos_device(device, fat_bits=32, label="FREEDOS", size=None, verify=True, cancel=None, progress=None):
+    from .boot import MIB, create_freedos, validate_freedos
+
+    guard(device)
+    if device.logical_sector != 512:
+        raise RufusError("FreeDOS boot media requires 512-byte logical sectors.")
+    size = size if size is not None else device.size // MIB * MIB
+    validate_freedos(size, fat_bits, label)
+    if size > device.size:
+        raise RufusError("FreeDOS image is larger than the selected drive.")
+    with tempfile.TemporaryDirectory(prefix="rufus-freedos-drive-") as directory:
+        guard(device, directory)
+        image = Path(directory) / "freedos.img"
+        create_freedos(image, size, fat_bits, label, cancel, progress)
+        return write_to_device(image, device, verify=verify, cancel=cancel, progress=progress)

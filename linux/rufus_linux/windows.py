@@ -188,15 +188,16 @@ def quote_wim_path(path):
     raise RufusError("Temporary path contains both quote styles; select another TMPDIR.")
 
 
-def apply_windows_options(root, options, cancel=None, progress=None):
+def apply_windows_options(root, options, cancel=None, progress=None, *, require_uefi=True):
     options.validate()
     if not options.enabled:
-        return validate_windows_tree(root)
-    files = validate_windows_tree(root)
+        return validate_windows_tree(root, require_uefi)
+    files = validate_windows_tree(root, require_uefi)
     reserved = {"autounattend.xml", "unattend.xml", "sources/$oem$/$$/panther/unattend.xml"}
     if any(relative.casefold() in reserved for _, relative, _ in files):
         raise RufusError("ISO already contains a Windows answer file. Refusing to overwrite its setup configuration.")
-    architecture = installer_architecture(root, options.architecture)
+    architecture = (options.architecture if not require_uefi and options.architecture else
+                    installer_architecture(root, options.architecture))
     data = answer_file(options, architecture)
     check_cancel(cancel)
     emit(progress, "Applying Windows setup options")
@@ -216,7 +217,7 @@ def apply_windows_options(root, options, cancel=None, progress=None):
         destination = case_path(root, "sources/$OEM$/$$/Panther", create=True) / "unattend.xml"
         with destination.open("xb") as output:
             output.write(data)
-    return validate_windows_tree(root)
+    return validate_windows_tree(root, require_uefi)
 
 
 def prepare_windows(source, output, options=None, expected="", cancel=None, progress=None):

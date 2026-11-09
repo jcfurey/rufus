@@ -140,6 +140,15 @@ class ImageTests(unittest.TestCase):
         core.write_to_file(self.source, self.output)
         self.assertEqual(self.output.read_bytes(), data)
 
+    def test_udf_dvd_without_partition_table_is_not_written_as_bootable_disk(self):
+        data = bytearray(65536)
+        data[32769:32774] = b"BEA01"
+        data[34817:34822] = b"NSR02"
+        self.source.write_bytes(data)
+        with self.assertRaisesRegex(core.RufusError, "DD mode"):
+            core.write_to_file(self.source, self.output)
+        self.assertFalse(self.output.exists())
+
     def test_tail_signature_clear_keeps_written_image_intact(self):
         capacity = len(self.data) + 2 * 1024 * 1024
         with self.output.open("w+b") as output, core.prepare_image(self.source) as image:

@@ -124,11 +124,12 @@ class DriveSafetyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / "source.iso"
             image.write_bytes(b"original ISO contents")
-            def stage(*_):
+            def stage(*_, **_kwargs):
                 image.write_bytes(b"replaced during extraction")
                 return []
             with patch.object(devices, "guard", return_value=usb()), \
-                 patch.object(devices, "stage_windows_iso", side_effect=stage), \
+                 patch("rufus_linux.media.stage_windows_iso", side_effect=stage), \
+                 patch("rufus_linux.media.shutil.which", return_value="/not-executed"), \
                  patch.object(devices, "UDisks") as service:
                 with self.assertRaisesRegex(RufusError, "changed during extraction"):
                     devices.windows_installer(image, usb())

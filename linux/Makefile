@@ -1,16 +1,18 @@
 PYTHON ?= /usr/bin/python3
 PREFIX ?= /usr/local
 DESTDIR ?=
-VERSION = 0.2.0
+VERSION = 0.3.0
 SOURCES = $(wildcard rufus_linux/*.py)
+RESOURCES = $(wildcard ../res/freedos/* ../src/ms-sys/inc/*.h) ../res/uefi/uefi-ntfs.img
 
-.PHONY: all check smoke-test gui-test integration install uninstall clean deb
+.PHONY: all check smoke-test gui-test boot-test uefi-test integration install uninstall clean deb
 all: dist/rufus-linux
 
-dist/rufus-linux: $(SOURCES) Makefile ../LICENSE.txt
+dist/rufus-linux: $(SOURCES) $(RESOURCES) build_assets.py Makefile ../LICENSE.txt
 	rm -rf build/app
 	mkdir -p dist build/app/rufus_linux
 	cp $(SOURCES) build/app/rufus_linux/
+	$(PYTHON) build_assets.py build/app
 	cp ../LICENSE.txt build/app/
 	$(PYTHON) -m zipapp build/app --main rufus_linux.cli:entrypoint --python /usr/bin/python3 --output dist/rufus-linux.tmp --compress
 	mv dist/rufus-linux.tmp dist/rufus-linux
@@ -24,6 +26,12 @@ smoke-test: all
 
 gui-test:
 	$(PYTHON) tests/gui_smoke.py
+
+boot-test:
+	$(PYTHON) tests/boot_smoke.py
+
+uefi-test:
+	$(PYTHON) tests/uefi_smoke.py
 
 integration:
 	$(PYTHON) tests/udisks_integration.py

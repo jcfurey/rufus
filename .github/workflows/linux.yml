@@ -3,9 +3,9 @@ name: Native Linux
 on:
   push:
     branches: [linux-port]
-    paths: ['linux/**', 'rufus-linux', '.github/workflows/linux.yml']
+    paths: ['linux/**', 'rufus-linux', 'res/freedos/**', 'res/uefi/**', 'src/ms-sys/inc/**', '.github/workflows/linux.yml']
   pull_request:
-    paths: ['linux/**', 'rufus-linux', '.github/workflows/linux.yml']
+    paths: ['linux/**', 'rufus-linux', 'res/freedos/**', 'res/uefi/**', 'src/ms-sys/inc/**', '.github/workflows/linux.yml']
   workflow_dispatch:
 
 permissions:
@@ -19,11 +19,13 @@ jobs:
       - name: Install native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-gi gir1.2-gtk-4.0 udisks2 dosfstools xorriso xvfb xauth wimtools qemu-utils zstd mtools
+          sudo apt-get install -y python3-gi gir1.2-gtk-4.0 udisks2 dosfstools xorriso xvfb xauth wimtools qemu-utils zstd mtools ntfs-3g 7zip qemu-system-x86 seabios ovmf
       - name: Test image writing and drive protection
         run: make -C linux check
       - name: Build standalone application and Ubuntu package
         run: make -C linux all deb
+      - name: Boot generated BIOS and UEFI media without root
+        run: make -C linux boot-test uefi-test
       - name: Check desktop startup
         run: |
           xvfb-run -a ./linux/dist/rufus-linux gui --smoke-test

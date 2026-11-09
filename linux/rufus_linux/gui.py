@@ -11,7 +11,7 @@ from gi.repository import Gio, GLib, Gtk
 
 from . import __version__
 from .core import RufusError, checksums, expected_sha256, human_size
-from .devices import backup_device, discover_devices, format_device, windows_installer, write_to_device
+from .devices import backup_device, discover_devices, format_device, freedos_device, windows_installer, write_to_device
 from .windows import WindowsOptions
 
 
@@ -74,9 +74,10 @@ class Window(Gtk.ApplicationWindow):
         self.form.append(self.label("Boot selection"))
         self.mode = Gtk.DropDown.new_from_strings([
             "Disk image (DD) — Linux / IMG / compressed image",
-            "Windows installer (UEFI) — Windows ISO",
+            "Windows installer — ISO (BIOS / UEFI)",
             "Non-bootable — format drive",
-            "Save drive to image — backup"])
+            "Save drive to image — backup",
+            "FreeDOS (BIOS) — bundled DOS boot media"])
         self.mode.connect("notify::selected", lambda *_: self.update_controls())
         self.form.append(self.mode)
         self.image_row = Gtk.Box(spacing=8)
@@ -87,6 +88,14 @@ class Window(Gtk.ApplicationWindow):
         self.choose.connect("clicked", self.choose_image)
         self.image_row.append(self.choose)
         self.form.append(self.image_row)
+
+        self.windows_media = Gtk.Box(spacing=8)
+        self.win_filesystem = Gtk.DropDown.new_from_strings(["FAT32 (split large WIM files)", "NTFS (UEFI:NTFS)"])
+        self.win_firmware = Gtk.DropDown.new_from_strings(["UEFI (GPT)", "BIOS (MBR)"])
+        self.win_filesystem.set_hexpand(True)
+        self.windows_media.append(self.win_filesystem)
+        self.windows_media.append(self.win_firmware)
+        self.form.append(self.windows_media)
 
         self.windows_box = Gtk.Expander(label="Windows setup options (optional)")
         windows_options = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -108,6 +117,15 @@ class Window(Gtk.ApplicationWindow):
 
         self.backup_format = Gtk.DropDown.new_from_strings(["Raw disk image (.img)", "Fixed virtual hard disk (.vhd)"])
         self.form.append(self.backup_format)
+
+        self.freedos_box = Gtk.Box(spacing=8)
+        self.freedos_fat = Gtk.DropDown.new_from_strings(["FAT16", "FAT32"])
+        self.freedos_fat.set_selected(1)
+        self.freedos_label = Gtk.Entry(text="FREEDOS", placeholder_text="Volume label")
+        self.freedos_label.set_hexpand(True)
+        self.freedos_box.append(self.freedos_fat)
+        self.freedos_box.append(self.freedos_label)
+        self.form.append(self.freedos_box)
 
         self.format_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.format_box.append(self.label("Partition scheme and filesystem"))
@@ -158,6 +176,8 @@ class Window(Gtk.ApplicationWindow):
         self.start.connect("clicked", self.start_clicked)
         buttons.append(self.start)
         outer.append(buttons)
+        self.win_filesystem.connect("notify::selected", lambda *_: self.update_controls())
+        self.win_firmware.connect("notify::selected", lambda *_: self.update_controls())
         self.update_controls()
         self.refresh()
         GLib.timeout_add_seconds(5, self.periodic_refresh)
@@ -174,12 +194,14 @@ class Window(Gtk.ApplicationWindow):
 
     def update_controls(self):
         mode = self.mode.get_selected()
-        self.image_row.set_visible(mode != 2)
+        self.image_row.set_visible(mode not in (2, 4))
         self.hash_box.set_visible(mode in (0, 1))
         self.verify.set_visible(mode != 2)
         self.format_box.set_visible(mode == 2)
         self.windows_box.set_visible(mode == 1)
+        self.windows_media.set_visible(mode == 1)
         self.backup_format.set_visible(mode == 3)
+        self.freedos_box.set_visible(mode == 4)
         self.choose.set_label("Save as…" if mode == 3 else "Select image…")
         selected_path = self.output if mode == 3 else self.image
         self.image_label.set_text(Path(selected_path).name if selected_path else
@@ -190,11 +212,16 @@ class Window(Gtk.ApplicationWindow):
             "Writes the image's partition layout. Supports compressed images, ZIP, and fixed/dynamic VHD.",
             "Creates GPT + FAT32 media for UEFI PCs. Large install.wim files are split automatically.",
             "Creates one data partition using the selected filesystem.",
-            "Opens the USB drive read-only and saves all sectors to a new image file. Existing files are protected.")[mode])
+            "Opens the USB drive read-only and saves all sectors to a new image file. Existing files are protected.",
+            "Creates BIOS/MBR boot media using Rufus's bundled FreeDOS kernel and shell. Requires mtools.")[mode])
+        if mode == 1:
+            fs = "FAT32" if self.win_filesystem.get_selected() == 0 else "NTFS"
+            target = "UEFI/GPT" if self.win_firmware.get_selected() == 0 else "BIOS/MBR"
+            self.mode_note.set_text(f"Prepares {target} Windows media using {fs}, then writes and verifies the image.")
         device = self.selected_device()
         blocked = device is not None and device.reason and not (mode == 3 and device.reason == "Drive is read-only.")
         self.start.set_sensitive(not self.busy and device is not None and not blocked
-                                 and (mode == 2 or selected_path is not None))
+                                 and (mode in (2, 4) or selected_path is not None))
         self.hash_button.set_sensitive(self.image is not None and not self.busy)
         if device:
             self.device_note.set_text(device.reason if blocked else
@@ -382,6 +409,8 @@ class Window(Gtk.ApplicationWindow):
         expected, verify = self.hash.get_text(), self.verify.get_active()
         filesystem = ("vfat", "exfat", "ntfs", "ext2", "ext3", "ext4")[self.filesystem.get_selected()]
         table, label = ("gpt", "dos")[self.table.get_selected()], self.volume.get_text()
+        dos_fat, dos_label = (16, 32)[self.freedos_fat.get_selected()], self.freedos_label.get_text()
+        win_fs, win_target = ("vfat", "ntfs")[self.win_filesystem.get_selected()], ("uefi", "bios")[self.win_firmware.get_selected()]
         dialog = Gtk.Dialog(title="Erase selected USB drive?", transient_for=self, modal=True)
         dialog.set_default_size(470, 220)
         dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
@@ -409,9 +438,12 @@ class Window(Gtk.ApplicationWindow):
             if mode == 0:
                 self.work(lambda: write_to_device(image, device, expected, verify, self.cancel, self.report))
             elif mode == 1:
-                self.work(lambda: windows_installer(image, device, expected, verify, self.cancel, self.report, options))
-            else:
+                self.work(lambda: windows_installer(image, device, expected, verify, self.cancel, self.report, options, win_fs, win_target))
+            elif mode == 2:
                 self.work(lambda: format_device(device, filesystem, label, table, self.cancel, self.report))
+            else:
+                self.work(lambda: freedos_device(device, dos_fat, dos_label, verify=verify,
+                                                cancel=self.cancel, progress=self.report))
         dialog.connect("response", response)
         dialog.present()
 

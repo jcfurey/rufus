@@ -1,9 +1,23 @@
 #!/usr/bin/python3
 """Launch the native Linux port directly from a source checkout."""
 from pathlib import Path
+import os
 import sys
+import sysconfig
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "linux"))
+root = Path(__file__).resolve().parent
+tools = root / "linux/build/tools/root"
+# Development-only packages may be unpacked locally instead of installed with
+# sudo. Re-exec so the dynamic loader also sees their library directory.
+if tools.is_dir() and os.environ.get("RUFUS_USE_LOCAL_TOOLS", "1") != "0" and not os.environ.get("RUFUS_LOCAL_TOOLS_ACTIVE"):
+    env = dict(os.environ)
+    env["PATH"] = str(tools / "usr/bin") + os.pathsep + env.get("PATH", "")
+    library = tools / "usr/lib" / sysconfig.get_config_var("MULTIARCH")
+    env["LD_LIBRARY_PATH"] = str(library) + os.pathsep + env.get("LD_LIBRARY_PATH", "")
+    env["RUFUS_LOCAL_TOOLS_ACTIVE"] = "1"
+    os.execve("/usr/bin/python3", ["/usr/bin/python3", str(Path(__file__).resolve()), *sys.argv[1:]], env)
+
+sys.path.insert(0, str(root / "linux"))
 from rufus_linux.cli import main
 
 sys.exit(main())
