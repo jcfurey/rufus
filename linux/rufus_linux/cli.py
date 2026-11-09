@@ -9,9 +9,27 @@ import threading
 import time
 
 from . import __version__
-from .core import Cancelled, RufusError, checksum, human_size, write_to_file
-from .devices import (discover_devices, format_device, windows_installer,
+from .core import Cancelled, HASH_ALGORITHMS, RufusError, checksums, human_size, write_to_file
+from .devices import (backup_device, discover_devices, format_device, windows_installer,
                       write_to_device)
+from .windows import WindowsOptions, answer_file, prepare_windows
+
+
+def windows_arguments(command):
+    command.add_argument("--bypass-hardware-checks", dest="bypass_hardware", action="store_true",
+                         help="add Rufus's WinPE TPM/Secure Boot/RAM check bypass")
+    command.add_argument("--offline-account", action="store_true", help="request offline Windows account setup")
+    command.add_argument("--local-account", default="", help="create a local administrator and require a password change")
+    command.add_argument("--privacy", action="store_true", help="disable express data-collection choices during setup")
+    command.add_argument("--disable-device-encryption", dest="disable_encryption", action="store_true")
+    command.add_argument("--locale", default="", help="Windows locale, e.g. en-US")
+    command.add_argument("--timezone", default="", help="Windows time zone ID, e.g. Central Standard Time")
+    command.add_argument("--architecture", choices=("amd64", "x86", "arm64", "arm"), default="")
+    command.add_argument("--boot-index", type=int, default=0, help="override the boot.wim Setup image index")
+
+
+def windows_options(args):
+    return WindowsOptions(**{name: getattr(args, name) for name in WindowsOptions.__dataclass_fields__})
 
 
 def parser():
@@ -22,9 +40,12 @@ def parser():
     gui.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
     devices = commands.add_parser("devices", help="list USB/removable drives; never lists internal disks")
     devices.add_argument("--json", action="store_true")
-    digest = commands.add_parser("checksum", help="compute a file's SHA-256")
+    digest = commands.add_parser("checksum", help="compute MD5, SHA-1, SHA-256, or SHA-512 in one read")
     digest.add_argument("image")
-    write = commands.add_parser("write", help="write a raw/hybrid ISO, IMG, gzip, xz, or bzip2 image")
+    digest.add_argument("--algorithm", choices=HASH_ALGORITHMS + ("all",), default="sha256")
+    digest.add_argument("--all", dest="algorithm", action="store_const", const="all")
+    digest.add_argument("--json", action="store_true")
+    write = commands.add_parser("write", help="restore disk images, compressed images, ZIP, or VHD")
     write.add_argument("image")
     destination = write.add_mutually_exclusive_group(required=True)
     destination.add_argument("--device", help="whole USB drive, e.g. /dev/sdb")
@@ -38,6 +59,22 @@ def parser():
     windows.add_argument("--confirm", required=True)
     windows.add_argument("--sha256", default="")
     windows.add_argument("--no-verify", action="store_true")
+    windows_arguments(windows)
+    prepare = commands.add_parser("prepare-windows", help="extract/customize Windows ISO into a NEW directory; no drive needed")
+    prepare.add_argument("image")
+    prepare.add_argument("--output", required=True)
+    prepare.add_argument("--sha256", default="")
+    windows_arguments(prepare)
+    answer = commands.add_parser("windows-config", help="generate a Windows answer file without touching a drive")
+    answer.add_argument("--output", required=True)
+    windows_arguments(answer)
+    backup = commands.add_parser("backup", help="save and verify an entire USB drive as raw IMG or fixed VHD")
+    sources = backup.add_mutually_exclusive_group(required=True)
+    sources.add_argument("--device", help="USB/removable source drive; opened read-only")
+    sources.add_argument("--source", help="regular file source for backup/restore testing")
+    backup.add_argument("--output", required=True, help="NEW destination filename; existing files are never overwritten")
+    backup.add_argument("--format", choices=("raw", "vhd"), default="raw")
+    backup.add_argument("--no-verify", action="store_true")
     fmt = commands.add_parser("format", help="erase and format a USB drive with one partition")
     fmt.add_argument("--device", required=True)
     fmt.add_argument("--confirm", required=True)
@@ -47,13 +84,13 @@ def parser():
     return root
 
 
-def select_device(path, confirmation):
-    if path != confirmation:
+def select_device(path, confirmation=None, destructive=True):
+    if destructive and path != confirmation:
         raise RufusError("Erasing a drive requires --confirm with the same exact path as --device.")
     device = next((d for d in discover_devices() if d.path == path), None)
     if device is None:
         raise RufusError("Select a whole USB/removable drive listed by the devices command.")
-    if device.reason:
+    if device.reason and not (not destructive and device.reason == "Drive is read-only."):
         raise RufusError(device.reason)
     return device
 
@@ -89,7 +126,14 @@ def main(argv=None):
                 state = device.reason or "Ready"
                 print(f"{device.path}\t{human_size(device.size)}\t{device.model}\t{state}")
         elif args.command == "checksum":
-            print(f"{checksum(args.image, cancel, progress)}  {args.image}")
+            algorithms = HASH_ALGORITHMS if args.algorithm == "all" else (args.algorithm,)
+            result = checksums(args.image, algorithms, cancel, progress)
+            if args.json:
+                print(json.dumps(result, indent=2))
+            else:
+                for name, digest in result.items():
+                    prefix = f"{name.upper()} " if len(result) > 1 else ""
+                    print(f"{prefix}{digest}  {args.image}")
         elif args.command == "write":
             if args.output:
                 result = write_to_file(args.image, args.output, args.sha256,
@@ -101,8 +145,26 @@ def main(argv=None):
             print(f"Image SHA-256: {result}")
         elif args.command == "windows":
             result = windows_installer(args.image, select_device(args.device, args.confirm),
-                                       args.sha256, not args.no_verify, cancel, progress)
+                                       args.sha256, not args.no_verify, cancel, progress, windows_options(args))
             print(f"Windows ISO SHA-256: {result}")
+        elif args.command == "prepare-windows":
+            result = prepare_windows(args.image, args.output, windows_options(args), args.sha256, cancel, progress)
+            print(json.dumps(result, indent=2))
+        elif args.command == "windows-config":
+            from .backup import new_output
+            from .core import write_all
+            data = answer_file(windows_options(args))
+            with new_output(args.output) as fd:
+                write_all(fd, data)
+            print(f"Created Windows answer file: {args.output}")
+        elif args.command == "backup":
+            if args.source:
+                from .backup import backup_file
+                result = backup_file(args.source, args.output, args.format, not args.no_verify, cancel, progress)
+            else:
+                result = backup_device(select_device(args.device, destructive=False), args.output,
+                                       args.format, not args.no_verify, cancel, progress)
+            print(f"Backed-up disk SHA-256: {result}")
         elif args.command == "format":
             format_device(select_device(args.device, args.confirm), args.filesystem,
                           args.label, args.table, cancel, progress)

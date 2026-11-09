@@ -10,8 +10,9 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gio, GLib, Gtk
 
 from . import __version__
-from .core import RufusError, checksum, expected_sha256, human_size
-from .devices import discover_devices, format_device, windows_installer, write_to_device
+from .core import RufusError, checksums, expected_sha256, human_size
+from .devices import backup_device, discover_devices, format_device, windows_installer, write_to_device
+from .windows import WindowsOptions
 
 
 class Window(Gtk.ApplicationWindow):
@@ -21,6 +22,8 @@ class Window(Gtk.ApplicationWindow):
         self.set_resizable(True)
         self.devices = []
         self.image = None
+        self.output = None
+        self.hash_window = None
         self.busy = False
         self.refreshing = False
         self.cancel = threading.Event()
@@ -33,7 +36,10 @@ class Window(Gtk.ApplicationWindow):
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
         for side in ("top", "bottom", "start", "end"):
             getattr(outer, f"set_margin_{side}")(24)
-        self.set_child(outer)
+        scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER,
+                                     vscrollbar_policy=Gtk.PolicyType.AUTOMATIC)
+        scroller.set_child(outer)
+        self.set_child(scroller)
         hero = Gtk.Box(spacing=16)
         icon = Gtk.Image.new_from_icon_name("drive-removable-media")
         icon.set_pixel_size(56)
@@ -69,7 +75,8 @@ class Window(Gtk.ApplicationWindow):
         self.mode = Gtk.DropDown.new_from_strings([
             "Disk image (DD) — Linux / IMG / compressed image",
             "Windows installer (UEFI) — Windows ISO",
-            "Non-bootable — format drive"])
+            "Non-bootable — format drive",
+            "Save drive to image — backup"])
         self.mode.connect("notify::selected", lambda *_: self.update_controls())
         self.form.append(self.mode)
         self.image_row = Gtk.Box(spacing=8)
@@ -80,6 +87,27 @@ class Window(Gtk.ApplicationWindow):
         self.choose.connect("clicked", self.choose_image)
         self.image_row.append(self.choose)
         self.form.append(self.image_row)
+
+        self.windows_box = Gtk.Expander(label="Windows setup options (optional)")
+        windows_options = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        windows_options.set_margin_top(8)
+        self.win_bypass = Gtk.CheckButton(label="Remove TPM, Secure Boot and RAM requirements")
+        self.win_offline = Gtk.CheckButton(label="Request offline account setup")
+        self.win_privacy = Gtk.CheckButton(label="Skip express data-collection choices")
+        self.win_encrypt = Gtk.CheckButton(label="Prevent automatic device encryption")
+        for widget in (self.win_bypass, self.win_offline, self.win_privacy, self.win_encrypt):
+            windows_options.append(widget)
+        self.win_user = Gtk.Entry(placeholder_text="Local administrator name (optional; password change at first login)")
+        self.win_locale = Gtk.Entry(placeholder_text="Windows language and region, e.g. en-US (optional)")
+        self.win_timezone = Gtk.Entry(placeholder_text="Windows time zone, e.g. Central Standard Time (optional)")
+        self.win_arch = Gtk.DropDown.new_from_strings(["Detect architecture from ISO", "amd64", "x86", "arm64", "arm"])
+        for widget in (self.win_user, self.win_locale, self.win_timezone, self.win_arch):
+            windows_options.append(widget)
+        self.windows_box.set_child(windows_options)
+        self.form.append(self.windows_box)
+
+        self.backup_format = Gtk.DropDown.new_from_strings(["Raw disk image (.img)", "Fixed virtual hard disk (.vhd)"])
+        self.form.append(self.backup_format)
 
         self.format_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.format_box.append(self.label("Partition scheme and filesystem"))
@@ -100,7 +128,7 @@ class Window(Gtk.ApplicationWindow):
         self.hash.set_hexpand(True)
         self.hash.set_max_length(64)
         hash_row.append(self.hash)
-        self.hash_button = Gtk.Button(label="Calculate")
+        self.hash_button = Gtk.Button(label="Calculate all")
         self.hash_button.connect("clicked", self.calculate_hash)
         hash_row.append(self.hash_button)
         self.hash_box.append(hash_row)
@@ -147,20 +175,31 @@ class Window(Gtk.ApplicationWindow):
     def update_controls(self):
         mode = self.mode.get_selected()
         self.image_row.set_visible(mode != 2)
-        self.hash_box.set_visible(mode != 2)
+        self.hash_box.set_visible(mode in (0, 1))
         self.verify.set_visible(mode != 2)
         self.format_box.set_visible(mode == 2)
+        self.windows_box.set_visible(mode == 1)
+        self.backup_format.set_visible(mode == 3)
+        self.choose.set_label("Save as…" if mode == 3 else "Select image…")
+        selected_path = self.output if mode == 3 else self.image
+        self.image_label.set_text(Path(selected_path).name if selected_path else
+                                  "Choose a new image filename" if mode == 3 else "No image selected")
+        self.image_label.set_tooltip_text(selected_path)
+        self.start.set_label("Save image" if mode == 3 else "Start")
         self.mode_note.set_text((
-            "Writes the image's partition layout. Supports hybrid ISOs, IMG, gzip, xz, and bzip2.",
+            "Writes the image's partition layout. Supports compressed images, ZIP, and fixed/dynamic VHD.",
             "Creates GPT + FAT32 media for UEFI PCs. Large install.wim files are split automatically.",
-            "Creates one data partition using the selected filesystem.")[mode])
+            "Creates one data partition using the selected filesystem.",
+            "Opens the USB drive read-only and saves all sectors to a new image file. Existing files are protected.")[mode])
         device = self.selected_device()
-        self.start.set_sensitive(not self.busy and device is not None and not device.reason
-                                 and (mode == 2 or self.image is not None))
+        blocked = device is not None and device.reason and not (mode == 3 and device.reason == "Drive is read-only.")
+        self.start.set_sensitive(not self.busy and device is not None and not blocked
+                                 and (mode == 2 or selected_path is not None))
         self.hash_button.set_sensitive(self.image is not None and not self.busy)
         if device:
-            self.device_note.set_text(device.reason or
-                f"{device.path} · {human_size(device.size)} · All existing data will be erased.")
+            self.device_note.set_text(device.reason if blocked else
+                f"{device.path} · {human_size(device.size)} · " +
+                ("Read-only backup; the source drive will be unmounted." if mode == 3 else "All existing data will be erased."))
         else:
             self.device_note.set_text("No USB drives connected." if not self.devices else "Select a USB drive.")
 
@@ -189,7 +228,8 @@ class Window(Gtk.ApplicationWindow):
         previous = self.selected_device()
         self.devices = devices
         choices = ["Select a USB drive…"] + [
-            f"{d.model} · {human_size(d.size)} ({d.path})" + (" · unavailable" if d.reason else "")
+            f"{d.model} · {human_size(d.size)} ({d.path})" +
+            (" · read-only" if d.reason == "Drive is read-only." else " · unavailable" if d.reason else "")
             for d in devices]
         self.drive.set_model(Gtk.StringList.new(choices))
         selected = next((i + 1 for i, d in enumerate(devices)
@@ -201,6 +241,11 @@ class Window(Gtk.ApplicationWindow):
         return False
 
     def choose_image(self, _button):
+        if self.mode.get_selected() == 3:
+            suffix = ".vhd" if self.backup_format.get_selected() else ".img"
+            dialog = Gtk.FileDialog(title="Save USB drive to a new image file", initial_name="usb-backup" + suffix)
+            dialog.save(self, None, self.output_selected)
+            return
         dialog = Gtk.FileDialog(title="Select a bootable disk image or Windows ISO")
         dialog.open(self, None, self.image_selected)
 
@@ -217,6 +262,18 @@ class Window(Gtk.ApplicationWindow):
             self.update_controls()
         except GLib.Error:
             pass  # File chooser cancellation.
+        except RufusError as exc:
+            self.status.set_text(str(exc))
+
+    def output_selected(self, dialog, result):
+        try:
+            path = dialog.save_finish(result).get_path()
+            if not path:
+                raise RufusError("Select a local destination for the drive image.")
+            self.output = path
+            self.update_controls()
+        except GLib.Error:
+            pass
         except RufusError as exc:
             self.status.set_text(str(exc))
 
@@ -277,14 +334,46 @@ class Window(Gtk.ApplicationWindow):
         return False
 
     def calculate_hash(self, *_):
-        self.work(lambda: checksum(self.image, self.cancel, self.report), self.hash.set_text)
+        self.work(lambda: checksums(self.image, cancel=self.cancel, progress=self.report), self.show_checksums)
+
+    def show_checksums(self, results):
+        self.hash.set_text(results["sha256"])
+        if self.hash_window is not None:
+            self.hash_window.destroy()
+        self.hash_window = Gtk.Window(title="Image checksums", transient_for=self, default_width=760, default_height=260)
+        text = Gtk.TextView(editable=False, monospace=True, wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        text.get_buffer().set_text("\n\n".join(f"{name.upper()}\n{value}" for name, value in results.items()))
+        text.set_top_margin(16)
+        text.set_bottom_margin(16)
+        text.set_left_margin(16)
+        text.set_right_margin(16)
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_child(text)
+        self.hash_window.set_child(scroller)
+        self.hash_window.present()
+
+    def windows_options(self):
+        return WindowsOptions(bypass_hardware=self.win_bypass.get_active(), offline_account=self.win_offline.get_active(),
+                              local_account=self.win_user.get_text(), privacy=self.win_privacy.get_active(),
+                              disable_encryption=self.win_encrypt.get_active(), locale=self.win_locale.get_text(),
+                              timezone=self.win_timezone.get_text(),
+                              architecture=("", "amd64", "x86", "arm64", "arm")[self.win_arch.get_selected()])
 
     def start_clicked(self, *_):
         device = self.selected_device()
         if not device:
             return
+        mode = self.mode.get_selected()
+        if mode == 3:
+            output, image_format, verify = self.output, ("raw", "vhd")[self.backup_format.get_selected()], self.verify.get_active()
+            self.work(lambda: backup_device(device, output, image_format, verify, self.cancel, self.report))
+            return
         try:
-            expected_sha256(self.hash.get_text())
+            if mode in (0, 1):
+                expected_sha256(self.hash.get_text())
+            options = self.windows_options()
+            if mode == 1:
+                options.validate()
         except RufusError as exc:
             self.status.set_text(str(exc))
             return
@@ -320,7 +409,7 @@ class Window(Gtk.ApplicationWindow):
             if mode == 0:
                 self.work(lambda: write_to_device(image, device, expected, verify, self.cancel, self.report))
             elif mode == 1:
-                self.work(lambda: windows_installer(image, device, expected, verify, self.cancel, self.report))
+                self.work(lambda: windows_installer(image, device, expected, verify, self.cancel, self.report, options))
             else:
                 self.work(lambda: format_device(device, filesystem, label, table, self.cancel, self.report))
         dialog.connect("response", response)

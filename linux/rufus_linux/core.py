@@ -2,10 +2,7 @@
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-import bz2
-import gzip
 import hashlib
-import lzma
 import os
 from pathlib import Path
 import re
@@ -15,6 +12,7 @@ import tempfile
 
 CHUNK = 4 * 1024 * 1024
 FAT_MAX_FILE = 2**32 - 1
+HASH_ALGORITHMS = ("md5", "sha1", "sha256", "sha512")
 
 
 class RufusError(Exception):
@@ -75,8 +73,31 @@ def digest_stream(stream, size, cancel=None, progress=None, stage="Checking imag
 
 
 def checksum(path, cancel=None, progress=None):
+    return checksums(path, ("sha256",), cancel, progress)["sha256"]
+
+
+def checksums(path, algorithms=HASH_ALGORITHMS, cancel=None, progress=None):
+    algorithms = tuple(dict.fromkeys(algorithms))
+    if not algorithms or any(name not in HASH_ALGORITHMS for name in algorithms):
+        raise RufusError("Supported checksums: md5, sha1, sha256, sha512.")
+    digests = {name: hashlib.new(name, usedforsecurity=False) for name in algorithms}
     with source_file(path) as stream:
-        return digest_stream(stream, os.fstat(stream.fileno()).st_size, cancel, progress)
+        original = os.fstat(stream.fileno())
+        done = 0
+        while True:
+            check_cancel(cancel)
+            chunk = stream.read(CHUNK)
+            if not chunk:
+                break
+            for digest in digests.values():
+                digest.update(chunk)
+            done += len(chunk)
+            emit(progress, "Calculating checksums", done, original.st_size)
+        current = os.fstat(stream.fileno())
+        if (current.st_size, current.st_mtime_ns, current.st_ctime_ns) != (
+                original.st_size, original.st_mtime_ns, original.st_ctime_ns):
+            raise RufusError("Source changed while calculating checksums.")
+    return {name: digest.hexdigest() for name, digest in digests.items()}
 
 
 @dataclass(frozen=True)
@@ -97,37 +118,19 @@ def prepare_image(path, expected="", cancel=None, progress=None):
     bad gzip trailer or oversized image cannot destroy a drive before detection.
     """
     expected = expected_sha256(expected)
+    from .images import payload_stream
+
     with source_file(path) as source:
         original = os.fstat(source.fileno())
         file_hash = digest_stream(source, original.st_size, cancel, progress)
         if expected and file_hash != expected:
             raise RufusError(f"SHA-256 mismatch: expected {expected}, got {file_hash}.")
-        source.seek(0)
-        magic = source.read(6)
-        source.seek(0)
-        decoder = (gzip.open if magic.startswith(b"\x1f\x8b") else
-                   lzma.LZMAFile if magic == b"\xfd7zXZ\x00" else
-                   bz2.BZ2File if magic.startswith(b"BZh") else None)
-        with tempfile.TemporaryFile() as staged:
-            if decoder:
-                emit(progress, "Decompressing image")
-                try:
-                    with decoder(source, "rb") as uncompressed:
-                        while True:
-                            check_cancel(cancel)
-                            chunk = uncompressed.read(CHUNK)
-                            if not chunk:
-                                break
-                            staged.write(chunk)
-                            emit(progress, "Decompressing image", source.tell(), original.st_size)
-                except (OSError, EOFError, lzma.LZMAError) as exc:
-                    raise RufusError(f"Cannot decompress this image: {exc}") from exc
-                stream = staged
-                size = stream.tell()
+        with payload_stream(source, original.st_size, str(path), cancel, progress) as (stream, size, transformed):
+            if transformed:
                 stream.seek(0)
                 image_hash = digest_stream(stream, size, cancel, progress)
             else:
-                stream, size, image_hash = source, original.st_size, file_hash
+                image_hash = file_hash
             if not size:
                 raise RufusError("The decompressed image is empty.")
             stream.seek(0)
@@ -230,10 +233,10 @@ def write_to_file(source, output, expected="", verify=True, cancel=None, progres
             os.close(fd)
 
 
-def run_tool(args, cancel=None):
+def run_tool(args, cancel=None, *, stdin=None, stdout=None):
     """Bounded output, cancellation, and no shell interpolation."""
     with tempfile.TemporaryFile() as log:
-        with subprocess.Popen(args, stdout=log, stderr=log) as process:
+        with subprocess.Popen(args, stdin=stdin, stdout=log if stdout is None else stdout, stderr=log) as process:
             try:
                 while True:
                     check_cancel(cancel)
@@ -296,8 +299,17 @@ def stage_windows_iso(image, staging, cancel=None, progress=None):
     run_tool(["xorriso", "-abort_on", "FAILURE", "-osirrox", "on", "-indev",
               str(Path(image).resolve()), "-extract", "/", str(staging)], cancel)
     files = validate_windows_tree(staging)
+    return ensure_fat32_files(staging, files, cancel, progress)
+
+
+def ensure_fat32_files(staging, files, cancel=None, progress=None, *, file_limit=FAT_MAX_FILE, part_size_mb=3800):
+    """Split WIM resources before formatting; smaller limits allow bounded tests."""
+    import shutil
+
+    if file_limit <= 0 or part_size_mb <= 0 or part_size_mb * 1024**2 >= file_limit:
+        raise RufusError("WIM split size must be positive and smaller than the file limit.")
     for path, relative, size in files:
-        if size <= FAT_MAX_FILE:
+        if size <= file_limit:
             continue
         if relative.casefold() != "sources/install.wim":
             raise RufusError(f"{relative} exceeds FAT32's 4 GiB file limit.")
@@ -308,10 +320,10 @@ def stage_windows_iso(image, staging, cancel=None, progress=None):
             raise RufusError("ISO already contains split WIM files alongside install.wim.")
         emit(progress, "Splitting install.wim for FAT32")
         run_tool(["wimlib-imagex", "split", str(path), str(path.with_name("install.swm")),
-                  "3800", "--check"], cancel)
+                  str(part_size_mb), "--check"], cancel)
         path.unlink()
     files = validate_windows_tree(staging)
-    if any(size > FAT_MAX_FILE for _, _, size in files):
+    if any(size > file_limit for _, _, size in files):
         raise RufusError("A staged file still exceeds FAT32's file size limit.")
     return files
 

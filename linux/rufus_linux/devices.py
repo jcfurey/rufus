@@ -96,11 +96,11 @@ def storage_numbers(number):
     return found
 
 
-def guard(device, source=None):
+def guard(device, source=None, writable=True):
     current = next((d for d in discover_devices() if d.path == device.path), None)
     if current is None or current.identity != device.identity:
         raise RufusError("Drive was removed or changed. Refresh and select it again.")
-    if current.reason:
+    if current.reason and not (not writable and current.reason == "Drive is read-only."):
         raise RufusError(current.reason)
     # Also protect ancestors of the live root, home, and boot filesystems, even
     # when lsblk cannot associate a mapper mountpoint with its physical drive.
@@ -177,23 +177,23 @@ class UDisks:
                     if ".NotMounted" not in str(exc):
                         raise
 
-    def ensure_unmounted(self, device, source=None):
+    def ensure_unmounted(self, device, source=None, writable=True):
         # Kernel mountinfo and UDisks's cached properties can briefly disagree
         # when a desktop volume monitor has just auto-mounted a new filesystem.
         for _ in range(20):
-            current = guard(device, source)
+            current = guard(device, source) if writable else guard(device, source, writable=False)
             self.unmount(current)
-            current = guard(device, source)
+            current = guard(device, source) if writable else guard(device, source, writable=False)
             if not current.mounts:
                 return current
             time.sleep(0.1)
         raise RufusError("A drive partition is still mounted. Close files on it and retry.")
 
-    def open_disk(self, device):
+    def open_disk(self, device, mode="rw"):
         path = self.object_for(device.path)
         self.check_system_hint(path)
         return self.call(path, BLOCK, "OpenDevice", "(sa{sv})",
-                         ("rw", {"flags": self.GLib.Variant("i", os.O_EXCL | os.O_CLOEXEC)}), fds=True)
+                         (mode, {"flags": self.GLib.Variant("i", os.O_EXCL | os.O_CLOEXEC)}), fds=True)
 
     def mount(self, partition):
         def current_mount():
@@ -286,10 +286,12 @@ def format_device(device, filesystem="vfat", label="RUFUS", table="gpt", cancel=
     emit(progress, "Complete", 1, 1)
 
 
-def windows_installer(source, device, expected="", verify=True, cancel=None, progress=None):
+def windows_installer(source, device, expected="", verify=True, cancel=None, progress=None, options=None):
     expected = expected_sha256(expected)
     validate_format(device, "vfat", "WINDOWS", "gpt")
     guard(device, source)
+    if options is not None:
+        options.validate()
     before = os.stat(source)
     actual = checksum(source, cancel, progress)
     if expected and actual != expected:
@@ -298,6 +300,11 @@ def windows_installer(source, device, expected="", verify=True, cancel=None, pro
     with tempfile.TemporaryDirectory(prefix="rufus-windows-") as staging:
         guard(device, staging)
         files = stage_windows_iso(source, Path(staging), cancel, progress)
+        if options is not None and options.enabled:
+            from .windows import apply_windows_options
+            files = apply_windows_options(Path(staging), options, cancel, progress)
+            if any(size > 2**32 - 1 for _, _, size in files):
+                raise RufusError("Customized Windows files exceed FAT32's file size limit.")
         after = os.stat(source)
         if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
                 after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
@@ -324,3 +331,37 @@ def windows_installer(source, device, expected="", verify=True, cancel=None, pro
             service.call(partition, FILESYSTEM, "Unmount", "(a{sv})", ({},))
     emit(progress, "Complete", 1, 1)
     return actual
+
+
+def backup_device(device, output, image_format="raw", verify=True, cancel=None, progress=None):
+    from .backup import save_image
+
+    output = Path(output).absolute()
+    parent = output.parent.resolve(strict=True)
+    if os.path.lexists(output):
+        raise RufusError("Backup destination already exists. Select a new image filename.")
+    if image_format not in ("raw", "vhd"):
+        raise RufusError("Backup format must be raw or vhd.")
+    if image_format == "vhd":
+        from .images import validate_vhd_size
+        validate_vhd_size(device.size)
+    guard(device, parent, writable=False)
+    if shutil.disk_usage(parent).free < device.size + (512 if image_format == "vhd" else 0):
+        raise RufusError("The destination filesystem does not have enough space for this drive image.")
+    check_cancel(cancel)
+    service = UDisks()
+    service.ensure_unmounted(device, parent, writable=False)
+    guard(device, parent, writable=False)
+    fd = service.open_disk(device, "r")
+    try:
+        info = os.fstat(fd)
+        actual = f"{os.major(info.st_rdev)}:{os.minor(info.st_rdev)}"
+        if not stat.S_ISBLK(info.st_mode) or actual != device.number:
+            raise RufusError("Opened drive does not match the selected backup source.")
+        capacity = struct.unpack("Q", fcntl.ioctl(fd, 0x80081272, b"\0" * 8))[0]
+        if capacity != device.size:
+            raise RufusError("The selected drive size changed. Refresh and retry.")
+        guard(device, parent, writable=False)
+        return save_image(fd, capacity, output, image_format, verify, cancel, progress)
+    finally:
+        os.close(fd)

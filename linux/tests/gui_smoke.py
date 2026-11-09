@@ -34,7 +34,18 @@ def main():
                 window.mode.set_selected(2)
                 assert window.format_box.get_visible()
                 assert not window.image_row.get_visible()
+                window.mode.set_selected(3)
+                assert window.backup_format.get_visible()
+                assert not window.hash_box.get_visible()
+                assert window.start.get_label() == "Save image"
                 window.mode.set_selected(1)
+                assert window.windows_box.get_visible()
+                assert not window.backup_format.get_visible()
+                window.win_user.set_text("gui-test-user")
+                window.win_privacy.set_active(True)
+                options = window.windows_options()
+                options.validate()
+                assert options.local_account == "gui-test-user" and options.privacy
                 assert not window.format_box.get_visible()
                 assert window.image_row.get_visible()
                 window.refreshed([Device("/dev/TEST_ONLY", 1024**3, "UI TEST", "", "999:999", (), ())], None)

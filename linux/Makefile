@@ -1,7 +1,7 @@
 PYTHON ?= /usr/bin/python3
 PREFIX ?= /usr/local
 DESTDIR ?=
-VERSION = 0.1.0
+VERSION = 0.2.0
 SOURCES = $(wildcard rufus_linux/*.py)
 
 .PHONY: all check smoke-test gui-test integration install uninstall clean deb
