@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Rufus for Linux
+Comment=Create bootable USB drives and format removable media
+Exec=rufus-linux
+Icon=rufus-linux
+Terminal=false
+Categories=System;
+Keywords=USB;boot;ISO;format;Windows;
+StartupNotify=true

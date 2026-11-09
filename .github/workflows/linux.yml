@@ -1,0 +1,39 @@
+name: Native Linux
+
+on:
+  push:
+    branches: [linux-port]
+    paths: ['linux/**', 'rufus-linux', '.github/workflows/linux.yml']
+  pull_request:
+    paths: ['linux/**', 'rufus-linux', '.github/workflows/linux.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi gir1.2-gtk-4.0 udisks2 dosfstools xorriso xvfb xauth
+      - name: Test image writing and drive protection
+        run: make -C linux check
+      - name: Build standalone application and Ubuntu package
+        run: make -C linux all deb
+      - name: Check desktop startup
+        run: |
+          xvfb-run -a ./linux/dist/rufus-linux gui --smoke-test
+          xvfb-run -a make -C linux gui-test
+        env:
+          GDK_BACKEND: x11
+          GSK_RENDERER: cairo
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rufus-linux
+          path: |
+            linux/dist/rufus-linux
+            linux/dist/*.deb

@@ -39,6 +39,12 @@ Features
 Compilation
 -----------
 
+This fork includes an experimental **native Linux port** on the `linux-port`
+branch. On Ubuntu, run `make -C linux` and then `./linux/dist/rufus-linux`, or
+`./rufus-linux` directly from the checkout. See [Linux build instructions,
+implemented features, and current limitations](linux/README.md). The instructions
+below apply to the original Windows application.
+
 Use either Visual Studio 2026 or MinGW and then invoke the `.sln` or `configure`/`make` respectively.
 
 #### Visual Studio

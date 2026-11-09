@@ -66,3 +66,8 @@ embedded.loc
 /rufus_files
 stamp-h1
 /.vs/rufus
+/linux/build/
+/linux/dist/
+!/linux/Makefile
+__pycache__/
+*.pyc

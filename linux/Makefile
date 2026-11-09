@@ -1,0 +1,49 @@
+PYTHON ?= /usr/bin/python3
+PREFIX ?= /usr/local
+DESTDIR ?=
+VERSION = 0.1.0
+SOURCES = $(wildcard rufus_linux/*.py)
+
+.PHONY: all check smoke-test gui-test integration install uninstall clean deb
+all: dist/rufus-linux
+
+dist/rufus-linux: $(SOURCES) Makefile ../LICENSE.txt
+	rm -rf build/app
+	mkdir -p dist build/app/rufus_linux
+	cp $(SOURCES) build/app/rufus_linux/
+	cp ../LICENSE.txt build/app/
+	$(PYTHON) -m zipapp build/app --main rufus_linux.cli:entrypoint --python /usr/bin/python3 --output dist/rufus-linux.tmp --compress
+	mv dist/rufus-linux.tmp dist/rufus-linux
+	chmod 755 dist/rufus-linux
+
+check:
+	$(PYTHON) -m unittest discover -s tests -v
+
+smoke-test: all
+	./dist/rufus-linux gui --smoke-test
+
+gui-test:
+	$(PYTHON) tests/gui_smoke.py
+
+integration:
+	$(PYTHON) tests/udisks_integration.py
+
+install: all
+	install -Dm755 dist/rufus-linux $(DESTDIR)$(PREFIX)/bin/rufus-linux
+	install -Dm644 ie.rufus.Linux.desktop $(DESTDIR)$(PREFIX)/share/applications/ie.rufus.Linux.desktop
+	install -Dm644 ../res/icons/rufus-128.png $(DESTDIR)$(PREFIX)/share/icons/hicolor/128x128/apps/rufus-linux.png
+
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/bin/rufus-linux
+	rm -f $(DESTDIR)$(PREFIX)/share/applications/ie.rufus.Linux.desktop
+	rm -f $(DESTDIR)$(PREFIX)/share/icons/hicolor/128x128/apps/rufus-linux.png
+
+deb: all
+	rm -rf build/deb
+	$(MAKE) install DESTDIR=$(CURDIR)/build/deb PREFIX=/usr
+	install -Dm644 ../LICENSE.txt build/deb/usr/share/doc/rufus-linux/copyright
+	install -Dm644 debian-control build/deb/DEBIAN/control
+	dpkg-deb --root-owner-group --build build/deb dist/rufus-linux_$(VERSION)_all.deb
+
+clean:
+	rm -rf dist build
