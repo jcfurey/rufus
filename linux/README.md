@@ -32,7 +32,7 @@ To create an Ubuntu package:
 
 ```sh
 make -C linux deb
-sudo apt install ./linux/dist/rufus-linux_0.5.0_all.deb
+sudo apt install ./linux/dist/rufus-linux_0.6.0_all.deb
 ```
 
 Alternatively, install the application and desktop launcher for your user:
@@ -72,8 +72,9 @@ Your desktop session must have `$HOME/.local/bin` on `PATH` for that launcher.
   x86-64 BIOS/UEFI, ARM64 UEFI, and 32-bit ARM UEFI, with optional persistence.
   Detects kernel architecture and installs matching GRUB loaders and modules.
 - NVIDIA Jetson installer USB preparation, legacy developer-kit SD-image
-  writing, model/storage instructions, recovery USB inspection, and a handoff
-  to the installed NVIDIA SDK Manager wizard.
+  writing, model/storage instructions, recovery USB inspection, and direct
+  NVIDIA BSP recovery jobs with command review, authorization, cancellation,
+  and logs. An installed SDK Manager wizard remains an optional route.
 - Windows setup options in the desktop and CLI: TPM/Secure Boot/RAM check bypass,
   offline/local account setup, privacy choices, explicit Windows locale/time zone,
   and automatic device-encryption control. WinPE options are injected into the
@@ -196,15 +197,21 @@ The application uses native Python/GI on x86 or ARM Linux hosts.
 Raspberry Pi and firmware-specific board images use **Disk image (DD)** mode,
 which preserves the vendor's complete boot and partition layout. The new
 **NVIDIA Jetson** mode provides model/storage instructions, unchanged NVIDIA
-installer USB creation, legacy developer-kit SD-image writing, and a handoff to
-the installed NVIDIA SDK Manager recovery wizard. Installer USB media and the
-Jetson's installation target are separate selections. No Jetson firmware is
-flashed by Rufus itself.
+installer USB creation, legacy developer-kit SD-image writing, and direct
+recovery flashing through a prepared NVIDIA BSP without SDK Manager. Direct
+jobs review the USB target, command, and firmware scope before one authorization
+request. Installer USB media and the Jetson's installation target are separate
+selections. BSP host executables must match the host CPU, including on ARM.
 
 See [PLATFORMS.md](PLATFORMS.md) for ARM dependencies, supported Jetson workflows,
 commands, and hardware validation limits.
+See [JETSON_RECOVERY.md](JETSON_RECOVERY.md) for BSP preparation and direct jobs.
 
 ## Storage behavior
+
+Direct Jetson recovery jobs select a recovery USB transport and storage attached
+to the Jetson. They run NVIDIA's privileged tooling under the review flow above.
+The removable-drive protections below apply to host image writing/formatting.
 
 Only whole USB/removable drives are selectable. Internal disks, active layered
 storage, and disks with system or swap mounts are
@@ -361,3 +368,16 @@ persistence implementation and boot testing remain on the parity checklist.
 - Native ARM64 CI was added but has not run remotely in this session. Real
   NVIDIA ISO and physical Jetson installation/QSPI validation remain outstanding;
   current Jetson tests use structural fixtures and mocked SDK Manager launches.
+
+### Version 0.6 validation
+
+- All 150 automated tests passed with the local toolset. New tests cover direct
+  BSP planning, all listed family/storage selections using synthetic BSPs,
+  internal/external command scope, host ELF compatibility, USB reconnection,
+  changed-input rejection, privileged-helper revalidation, one authorization,
+  protected logs, failures, and process-group cancellation.
+- GTK tests passed for BSP inspection, offline plan review and cancellation,
+  optional SDK Manager mode, existing drive confirmation, and async checksums.
+- NVIDIA's actual R39.2.1 BSP was inspected and planned read-only. Its Intel
+  host tools were recognized, and missing rootfs/dependencies/USB selection
+  correctly blocked execution. No vendor script or physical flash was run.

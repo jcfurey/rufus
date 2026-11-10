@@ -3,6 +3,7 @@
 import argparse
 from dataclasses import asdict
 import json
+from pathlib import Path
 import signal
 import sys
 import threading
@@ -77,7 +78,7 @@ def parser():
     jetson.add_argument("--model", choices=tuple(MODELS), required=True)
     jetson.add_argument("--storage", choices=("nvme", "sd", "emmc", "usb"), required=True,
                         help="installation target attached to the Jetson; distinct from the host's installer USB")
-    jetson.add_argument("--method", choices=("installer", "sd", "recovery"), default="installer")
+    jetson.add_argument("--method", choices=("installer", "sd", "direct", "recovery"), default="installer")
     jetson.add_argument("--plan", action="store_true", help="show model/storage instructions without writing anything")
     jetson.add_argument("--launch-sdkmanager", action="store_true", help="open NVIDIA's recovery installation wizard")
     destination = jetson.add_mutually_exclusive_group()
@@ -87,6 +88,22 @@ def parser():
     jetson.add_argument("--sha256", default="")
     jetson.add_argument("--no-verify", action="store_true")
     commands.add_parser("jetson-devices", help="inspect NVIDIA USB devices and recovery candidates; read-only")
+    bsp = commands.add_parser("jetson-bsp", help="inspect a prepared Linux_for_Tegra BSP without running its scripts")
+    bsp.add_argument("directory")
+    flash = commands.add_parser("jetson-flash", help="review or execute a direct NVIDIA BSP recovery job; no SDK Manager")
+    flash.add_argument("--bsp", required=True, help="prepared Linux_for_Tegra directory")
+    flash.add_argument("--model", choices=tuple(MODELS), required=True)
+    flash.add_argument("--storage", choices=("nvme", "sd", "emmc", "usb"), required=True)
+    flash.add_argument("--board", required=True, help="exact BSP profile, without .conf; match module and carrier")
+    flash.add_argument("--usb-port", default="", help="recovery USB port from jetson-devices, e.g. 1-2.4")
+    flash.add_argument("--external-device", default="", help="device name on the Jetson, e.g. nvme0n1p1; never a host /dev path")
+    flash.add_argument("--layout", default="", help="external partition XML path relative to the BSP")
+    flash.add_argument("--skip-firmware", action="store_true", help="external storage only; require already compatible firmware")
+    flash.add_argument("--action", choices=("flash", "probe"), default="flash",
+                       help="probe uses flash.sh --read-info when supported; still requires authorization")
+    flash.add_argument("--execute", action="store_true", help="execute only after reviewing the default JSON plan")
+    flash.add_argument("--confirm", help="exact USB-port and plan token from the reviewed JSON")
+    flash.add_argument("--log", help="NEW log filename; required with --execute")
     windows = commands.add_parser("windows", help="create BIOS/UEFI Windows media with FAT32 or NTFS")
     windows.add_argument("image")
     destination = windows.add_mutually_exclusive_group(required=True)
@@ -216,12 +233,32 @@ def main(argv=None):
                 print(f"Linux ISO SHA-256: {result}")
         elif args.command == "jetson-devices":
             from .jetson import recovery_devices
-            print(json.dumps(recovery_devices(), indent=2))
+            from .jetson_flash import connected_devices
+            known = {device["usb_port"]: device for device in connected_devices()}
+            print(json.dumps([{**device, **known.get(device["usb_port"], {})} for device in recovery_devices()], indent=2))
+        elif args.command == "jetson-bsp":
+            from .jetson_flash import inspect_bsp
+            print(json.dumps(inspect_bsp(args.directory), indent=2))
+        elif args.command == "jetson-flash":
+            from .jetson_flash import FlashRequest, execute_plan, make_plan
+            plan = make_plan(FlashRequest(args.bsp, args.model, args.storage, args.board, args.usb_port,
+                                          args.external_device, args.layout, not args.skip_firmware, args.action))
+            if not args.execute:
+                if args.confirm or args.log:
+                    raise RufusError("--confirm and --log require --execute; omit all three to review the plan.")
+                print(json.dumps(plan, indent=2))
+            else:
+                if not args.confirm or not args.log:
+                    raise RufusError("Execution requires --confirm with the reviewed plan token and --log with a NEW filename.")
+                result = execute_plan(plan, args.confirm, Path(args.log), cancel, progress)
+                print(json.dumps(result, indent=2))
         elif args.command == "jetson":
             from .jetson import installation_plan, launch_sdkmanager, write_media
             plan = installation_plan(args.model, args.storage, args.method)
             if args.plan:
                 print(json.dumps(plan, indent=2))
+            elif args.method == "direct":
+                raise RufusError("Use jetson-flash --bsp ... --board ... to review a direct BSP recovery plan.")
             elif args.method == "recovery":
                 if args.image or args.device or args.output:
                     raise RufusError("Recovery flashing uses NVIDIA SDK Manager, without a host disk-image destination.")

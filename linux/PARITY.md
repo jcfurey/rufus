@@ -83,8 +83,10 @@ extraction remains pending.
 | Raspberry Pi/vendor board images | Complete compressed/raw/ZIP image restoration preserves boot layout; multi-partition round trips pass | Physical board and firmware combinations |
 | Jetson Orin/Thor installer USB | Vendor ISO retained unchanged; NVIDIA overlay/repository and ARM64 loader checked, including embedded ESP | Real vendor ISO and physical target installations |
 | Legacy Jetson SD media | Model/method restrictions, verified complete-image restoration | Actual developer-kit images, QSPI compatibility and physical boots |
-| Jetson recovery/eMMC/NVMe | Read-only NVIDIA USB inspection and installed SDK Manager wizard handoff across listed families | Physical recovery flashing; vendor BSP/release/carrier compatibility |
+| Jetson recovery/eMMC/NVMe/SD/USB | Direct local-BSP command review, USB identity checks, one privileged job, live/persistent logs and cancellation; optional SDK Manager handoff | Physical recovery flashing; real BSP/release/carrier/host compatibility matrix |
 
 ARM media and model-specific Jetson workflows are documented in
 [PLATFORMS.md](PLATFORMS.md). Generic ARM boot validation does not establish
 Jetson firmware or Raspberry Pi boot compatibility.
+Direct recovery operation and its validation limits are documented in
+[JETSON_RECOVERY.md](JETSON_RECOVERY.md).

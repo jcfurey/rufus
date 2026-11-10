@@ -1,7 +1,7 @@
 PYTHON ?= /usr/bin/python3
 PREFIX ?= /usr/local
 DESTDIR ?=
-VERSION = 0.5.0
+VERSION = 0.6.0
 LIVE_ISO ?=
 LIVE_OUTPUT ?= build/live-reboot-test
 LIVE_LAYOUT ?= hybrid

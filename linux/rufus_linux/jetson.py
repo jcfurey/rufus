@@ -1,4 +1,4 @@
-"""NVIDIA Jetson installer media, legacy SD images, and SDK Manager handoff.
+"""NVIDIA Jetson installer media, legacy SD images, and recovery instructions.
 
 NVIDIA's installer and recovery tools own target-device installation and QSPI
 updates. Rufus writes their media unchanged; it never substitutes generic GRUB.
@@ -38,13 +38,13 @@ SD_GUIDES = {
 
 
 def installation_plan(model, storage="nvme", method="installer"):
-    if model not in MODELS or method not in ("installer", "sd", "recovery"):
+    if model not in MODELS or method not in ("installer", "sd", "direct", "recovery"):
         raise RufusError("Select a supported Jetson model and installation method.")
     name, targets, installer, sd = MODELS[model]
     if storage not in targets:
         raise RufusError(f"{name}: select supported storage or use NVIDIA's carrier-specific BSP instructions.")
     if method == "installer" and not installer:
-        raise RufusError(f"{name} needs its matching legacy SD image or NVIDIA SDK Manager recovery flashing.")
+        raise RufusError(f"{name} needs its matching legacy SD image or BSP/SDK Manager recovery flashing.")
     if method == "sd" and (not sd or storage != "sd"):
         raise RufusError("Legacy SD-image mode requires a supported SD-card developer kit and an SD target.")
     steps = ["Match the NVIDIA release and carrier-board support to the selected Jetson model."]
@@ -56,6 +56,11 @@ def installation_plan(model, storage="nvme", method="installer"):
         steps += ["Use the legacy NVIDIA SD-card image for this exact developer kit and JetPack release.",
                   "Write the image to the removable SD card and boot it in the Jetson.",
                   "A card image does not update QSPI firmware; use NVIDIA's matching firmware update procedure."]
+    elif method == "direct":
+        steps += ["Prepare the matching NVIDIA Linux_for_Tegra BSP and sample rootfs for this module/carrier.",
+                  "Connect the recovery USB port and enter Force Recovery mode.",
+                  "Select the BSP board profile and USB port, then review the command and firmware scope.",
+                  "Confirm the reviewed plan to authorize one direct BSP job. SDK Manager is not required."]
     else:
         steps += ["Connect the Jetson's recovery USB port and put it in Force Recovery mode.",
                   "Use NVIDIA SDK Manager to detect the board and select the matching JetPack/BSP and target storage.",
@@ -106,8 +111,8 @@ def validate_installer(image, work, cancel=None):
 @contextmanager
 def prepared_media(source, model, storage, method, expected="", cancel=None, progress=None, device=None):
     plan = installation_plan(model, storage, method)
-    if method == "recovery":
-        raise RufusError("Recovery flashing belongs to NVIDIA SDK Manager; it does not use a disk image writer.")
+    if method in ("direct", "recovery"):
+        raise RufusError("Recovery flashing requires a BSP job or SDK Manager; it does not use a disk image writer.")
     with tempfile.TemporaryDirectory(prefix="rufus-jetson-") as directory:
         work = Path(directory)
         if device is not None:

@@ -15,6 +15,8 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gio, GLib, Gtk
 from rufus_linux import gui
 from rufus_linux.devices import Device
+from rufus_linux import jetson_flash
+from test_jetson_flash import fixture
 
 
 def main():
@@ -25,6 +27,8 @@ def main():
         image = Path(directory) / "source.img"
         image.write_bytes(b"Rufus GTK checksum test" * 65536)
         expected = hashlib.sha256(image.read_bytes()).hexdigest()
+        bsp = fixture(Path(directory) / "Linux_for_Tegra")
+        state = {"phase": "initial"}
 
         def activate(app):
             try:
@@ -64,6 +68,11 @@ def main():
                 window.jetson_method.set_selected(2)
                 assert not window.device_row.get_visible()
                 assert not window.image_row.get_visible()
+                assert window.jetson_direct.get_visible()
+                assert window.start.get_label() == "Review BSP plan"
+                assert not window.start.get_sensitive()
+                window.jetson_method.set_selected(3)
+                assert not window.jetson_direct.get_visible()
                 assert window.start.get_label() == "Open SDK Manager"
                 assert window.start.get_sensitive()
                 for index, (_, targets, _, _) in enumerate(gui.JETSON_MODELS.values()):
@@ -102,7 +111,16 @@ def main():
                     window.confirmation.response(Gtk.ResponseType.CANCEL)
                     assert not window.busy
                     assert window.confirmation is None
-                    window.calculate_hash()
+                    window.mode.set_selected(6)
+                    window.jetson_model.set_selected(0)
+                    window.jetson_storage.set_selected(0)
+                    window.jetson_method.set_selected(2)
+                    window.jetson_bsp.set_text(str(bsp))
+                    window.show_bsp((jetson_flash.inspect_bsp(bsp), []))
+                    assert window.jetson_board.get_text() == "jetson-orin-nano-devkit"
+                    assert window.start.get_sensitive()
+                    state["phase"] = "review"
+                    window.start_clicked()
                     return False
                 # Let Wayland configure the transient window before simulating
                 # a user closing it; responding during activate precedes mapping.
@@ -110,13 +128,21 @@ def main():
 
                 def completed():
                     try:
+                        if state["phase"] == "review" and window.confirmation is not None:
+                            assert not window.confirmation.get_widget_for_response(Gtk.ResponseType.ACCEPT).get_sensitive()
+                            window.confirmation.response(Gtk.ResponseType.CANCEL)
+                            assert not window.busy and window.confirmation is None
+                            state["phase"] = "hash"
+                            window.mode.set_selected(1)
+                            window.calculate_hash()
+                            return True
                         if window.busy or window.confirmation is not None:
                             assert time.monotonic() - started < 15, "GTK worker timed out"
                             return True
                         assert window.hash.get_text() == expected
                         assert window.progress.get_fraction() == 1
                         assert not window.stop.get_sensitive()
-                        print("PASS: GTK modes, drive selection, confirmation cancellation, async checksum")
+                        print("PASS: GTK modes, BSP inspection/offline review/cancellation, drive confirmation, async checksum")
                     except Exception as exc:
                         failed.append(exc)
                     app.quit()
@@ -127,8 +153,9 @@ def main():
                 app.quit()
 
         app.connect("activate", activate)
-        with patch.object(gui, "discover_devices", return_value=[]):
+        with patch.object(gui, "discover_devices", return_value=[]), patch.object(jetson_flash, "execute_plan") as execute:
             app.run([])
+            execute.assert_not_called()
     if failed:
         raise AssertionError(str(failed[0]))
 

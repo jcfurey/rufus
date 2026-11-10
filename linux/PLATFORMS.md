@@ -75,6 +75,7 @@ the user's and vendor installer's responsibility.
 | --- | --- | --- |
 | Installer USB (Orin/Thor) | Check NVIDIA overlay/repository and ARM64 EFI loader, then copy the complete hybrid ISO unchanged | NVIDIA's booted installer selects supported attached NVMe/eMMC/microSD/USB storage |
 | Legacy SD image (Nano, Xavier NX, Orin Nano developer kits) | Decompress, write, and verify the exact developer-kit SD image | Boot that card with firmware compatible with its JetPack release |
+| Direct BSP recovery (all listed families, subject to matching BSP workflow) | Review board profile, connected recovery USB identity, command and firmware scope; authorize one logged BSP job | NVIDIA flash.sh/initrd tools install OS/firmware without SDK Manager |
 | Recovery setup (all listed families) | Inspect NVIDIA USB devices and open installed SDK Manager | NVIDIA's wizard detects the board and handles Force Recovery, authentication, QSPI/eMMC/NVMe flashing, and confirmation |
 
 For current ISO structure and supported storage, see NVIDIA's
@@ -97,8 +98,9 @@ automatically installed. Recovery needs a host OS and CPU architecture supported
 by the selected SDK Manager/JetPack release; legacy boards may need archived versions. A third-party
 carrier needs its vendor's BSP/configuration. Rufus opens the installed wizard
 without passwords, automatic EULA acceptance, flashing flags, or guessed board
-IDs. `jetson-devices` reports NVIDIA USB descriptors and APX recovery candidates;
-SDK Manager performs authoritative board detection.
+IDs. `jetson-devices` reports NVIDIA USB descriptors and recognized recovery
+families/connection identities. The BSP or SDK Manager performs authoritative
+EEPROM/SKU detection.
 
 ```sh
 # Read-only instructions and USB inspection.
@@ -125,7 +127,10 @@ decompressed image. Structural checks do not establish release authenticity,
 vendor signatures, or board compatibility. Physical Jetson installations and
 QSPI/eMMC/NVMe recovery flashes have not been performed. Current tests use
 structural ISO fixtures, unchanged board-image round trips, and mocked wizard
-launches. ARM UEFI kernel tests are separate and do not emulate Jetson hardware.
+launches, plus synthetic direct-BSP/helper jobs and actual R39.2.1 offline BSP
+inspection/planning. See [JETSON_RECOVERY.md](JETSON_RECOVERY.md) for direct
+recovery commands, BSP/host prerequisites, storage scope, and limitations.
+ARM UEFI kernel tests are separate and do not emulate Jetson hardware.
 
 ## Reproducing ARM firmware validation
 

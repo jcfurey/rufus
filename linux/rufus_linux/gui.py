@@ -1,6 +1,7 @@
 """GTK 4 frontend; storage operations run outside the GTK main thread."""
 
 from pathlib import Path
+import json
 import threading
 import time
 
@@ -33,6 +34,9 @@ class Window(Gtk.ApplicationWindow):
         self.last_progress = 0
         self.last_stage = ""
         self.confirmation = None
+        self.jetson_connections = []
+        self.jetson_profiles = []
+        self.jetson_log_window = None
         self.connect("close-request", self.close_requested)
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
@@ -162,6 +166,7 @@ class Window(Gtk.ApplicationWindow):
                                                             "Install onto Jetson eMMC", "Install onto Jetson USB storage"])
         self.jetson_method = Gtk.DropDown.new_from_strings(["Create NVIDIA installer USB — current Orin / Thor",
                                                            "Write legacy NVIDIA SD-card image",
+                                                           "Direct BSP recovery — no SDK Manager",
                                                            "Recovery flashing — open NVIDIA SDK Manager"])
         for widget in (self.jetson_model, self.jetson_storage, self.jetson_method):
             self.jetson_box.append(widget)
@@ -169,6 +174,31 @@ class Window(Gtk.ApplicationWindow):
             "https://docs.nvidia.com/jetson/archives/r39.2.1/DeveloperGuide/SD/FlashingSupport.html",
             "NVIDIA installation instructions")
         self.jetson_box.append(self.jetson_guide)
+        self.jetson_direct = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        bsp_row = Gtk.Box(spacing=8)
+        self.jetson_bsp = Gtk.Entry(placeholder_text="Prepared Linux_for_Tegra directory", hexpand=True)
+        bsp_row.append(self.jetson_bsp)
+        choose_bsp = Gtk.Button(label="Select BSP…")
+        choose_bsp.connect("clicked", self.choose_bsp)
+        bsp_row.append(choose_bsp)
+        inspect = Gtk.Button(label="Inspect / scan")
+        inspect.connect("clicked", self.inspect_jetson)
+        bsp_row.append(inspect)
+        self.jetson_direct.append(bsp_row)
+        self.jetson_profile = Gtk.DropDown.new_from_strings(["Inspect BSP to list board profiles"])
+        self.jetson_profile.connect("notify::selected", self.jetson_profile_changed)
+        self.jetson_direct.append(self.jetson_profile)
+        self.jetson_board = Gtk.Entry(placeholder_text="Exact board profile, without .conf")
+        self.jetson_direct.append(self.jetson_board)
+        self.jetson_usb = Gtk.DropDown.new_from_strings(["No recovery port selected — offline review"])
+        self.jetson_direct.append(self.jetson_usb)
+        self.jetson_external = Gtk.Entry(placeholder_text="Jetson external device (optional, e.g. nvme1n1p1)")
+        self.jetson_layout = Gtk.Entry(placeholder_text="External XML inside BSP (optional, e.g. tools/kernel_flash/flash_l4t_external.xml)")
+        self.jetson_firmware = Gtk.CheckButton(label="Update internal boot firmware with external storage", active=True)
+        self.jetson_action = Gtk.DropDown.new_from_strings(["Install OS / flash storage", "Read board / EEPROM information"])
+        for widget in (self.jetson_external, self.jetson_layout, self.jetson_firmware, self.jetson_action):
+            self.jetson_direct.append(widget)
+        self.jetson_box.append(self.jetson_direct)
         self.form.append(self.jetson_box)
 
         self.format_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -226,6 +256,8 @@ class Window(Gtk.ApplicationWindow):
         self.live_persist.connect("toggled", lambda *_: self.update_controls())
         for widget in (self.jetson_model, self.jetson_storage, self.jetson_method):
             widget.connect("notify::selected", lambda *_: self.update_controls())
+        for widget in (self.jetson_bsp, self.jetson_board):
+            widget.connect("changed", lambda *_: self.update_controls())
         self.update_controls()
         self.refresh()
         GLib.timeout_add_seconds(5, self.periodic_refresh)
@@ -242,7 +274,9 @@ class Window(Gtk.ApplicationWindow):
 
     def update_controls(self):
         mode = self.mode.get_selected()
-        recovery = mode == 6 and self.jetson_method.get_selected() == 2
+        recovery = mode == 6 and self.jetson_method.get_selected() >= 2
+        direct = recovery and self.jetson_method.get_selected() == 2
+        self.jetson_direct.set_visible(direct)
         self.image_row.set_visible(mode not in (2, 4) and not recovery)
         self.hash_box.set_visible(mode in (0, 1, 5, 6) and not recovery)
         self.verify.set_visible(mode != 2 and not recovery)
@@ -267,7 +301,7 @@ class Window(Gtk.ApplicationWindow):
         self.image_label.set_text(Path(selected_path).name if selected_path else
                                   "Choose a new image filename" if mode == 3 else "No image selected")
         self.image_label.set_tooltip_text(selected_path)
-        self.start.set_label("Open SDK Manager" if recovery else "Save image" if mode == 3 else "Start")
+        self.start.set_label("Review BSP plan" if direct else "Open SDK Manager" if recovery else "Save image" if mode == 3 else "Start")
         self.mode_note.set_text((
             "Restores complete disk and board images, including ARM and Raspberry Pi firmware layouts. "
             "Supports compressed images, ZIP, and fixed/dynamic VHD.",
@@ -297,10 +331,13 @@ class Window(Gtk.ApplicationWindow):
                 jetson_valid = False
         device = self.selected_device()
         blocked = device is not None and device.reason and not (mode == 3 and device.reason == "Drive is read-only.")
-        self.start.set_sensitive(not self.busy and jetson_valid and (recovery or
-                                 (device is not None and not blocked and (mode in (2, 4) or selected_path is not None))))
+        recovery_ready = recovery and (not direct or bool(self.jetson_bsp.get_text() and self.jetson_board.get_text()))
+        self.start.set_sensitive(not self.busy and self.confirmation is None and jetson_valid and (recovery_ready or (not recovery and
+                                 device is not None and not blocked and (mode in (2, 4) or selected_path is not None))))
         self.hash_button.set_sensitive(self.image is not None and not self.busy)
-        if recovery:
+        if direct:
+            self.device_note.set_text("Select a connected recovery USB port under the BSP settings. Review shows the OS target and firmware scope.")
+        elif recovery:
             self.device_note.set_text("Connect the Jetson's recovery USB port. Board detection and flashing occur in NVIDIA SDK Manager.")
         elif device:
             self.device_note.set_text(device.reason if blocked else
@@ -430,11 +467,11 @@ class Window(Gtk.ApplicationWindow):
             self.status.set_text(error)
             self.progress.set_text("Operation did not complete")
         else:
-            if on_success:
-                on_success(result)
             self.status.set_text(f"Complete · {time.monotonic() - self.started:.1f} seconds")
             self.progress.set_fraction(1)
             self.progress.set_text("Complete")
+            if on_success:
+                on_success(result)
         self.update_controls()
         self.refresh()
         return False
@@ -468,11 +505,134 @@ class Window(Gtk.ApplicationWindow):
     def jetson_selection(self):
         return (tuple(JETSON_MODELS)[self.jetson_model.get_selected()],
                 ("nvme", "sd", "emmc", "usb")[self.jetson_storage.get_selected()],
-                ("installer", "sd", "recovery")[self.jetson_method.get_selected()])
+                ("installer", "sd", "direct", "recovery")[self.jetson_method.get_selected()])
+
+    def choose_bsp(self, *_):
+        Gtk.FileDialog(title="Select prepared Linux_for_Tegra BSP").select_folder(self, None, self.bsp_selected)
+
+    def bsp_selected(self, dialog, result):
+        try:
+            path = dialog.select_folder_finish(result).get_path()
+            if path:
+                self.jetson_bsp.set_text(path)
+                self.inspect_jetson()
+        except GLib.Error:
+            pass
+
+    def inspect_jetson(self, *_):
+        from .jetson_flash import connected_devices, inspect_bsp
+        directory = self.jetson_bsp.get_text()
+        self.work(lambda: (inspect_bsp(directory), connected_devices()), self.show_bsp)
+
+    def show_bsp(self, result):
+        from .jetson_flash import REFERENCE_PROFILES
+        info, self.jetson_connections = result
+        self.jetson_profiles = info["profiles"]
+        previous = self.jetson_board.get_text()
+        recommended = REFERENCE_PROFILES[self.jetson_selection()[0]]
+        if self.jetson_selection()[1] == "emmc" and self.jetson_selection()[0] in ("nano", "xavier-nx"):
+            recommended += "-emmc"
+        chosen = previous if previous in self.jetson_profiles else recommended
+        self.jetson_profile.set_model(Gtk.StringList.new(self.jetson_profiles))
+        self.jetson_profile.set_selected(self.jetson_profiles.index(chosen) if chosen in self.jetson_profiles else 0)
+        self.jetson_profile_changed()
+        choices = ["No recovery port selected — offline review"] + [
+            f"{d['usb_port']} · {JETSON_MODELS[d['model']][0]} · {d['module_candidates']}"
+            for d in self.jetson_connections]
+        self.jetson_usb.set_model(Gtk.StringList.new(choices))
+        # Require selection even when only one board is connected.
+        self.jetson_usb.set_selected(0)
+        self.status.set_text(f"BSP R{info['release']} · {len(self.jetson_profiles)} profiles · "
+                             f"rootfs {'prepared' if info['rootfs_ready'] else 'needs preparation'} · "
+                             f"{len(self.jetson_connections)} recovery device(s)")
+
+    def jetson_profile_changed(self, *_):
+        index = self.jetson_profile.get_selected()
+        if index < len(self.jetson_profiles):
+            self.jetson_board.set_text(self.jetson_profiles[index])
+
+    def review_jetson(self):
+        from .jetson_flash import FlashRequest, make_plan
+        model, storage, _ = self.jetson_selection()
+        index = self.jetson_usb.get_selected() - 1
+        port = self.jetson_connections[index]["usb_port"] if 0 <= index < len(self.jetson_connections) else ""
+        request = FlashRequest(self.jetson_bsp.get_text(), model, storage, self.jetson_board.get_text(), port,
+                               self.jetson_external.get_text(), self.jetson_layout.get_text(),
+                               self.jetson_firmware.get_active(), ("flash", "probe")[self.jetson_action.get_selected()])
+        self.work(lambda: make_plan(request), self.show_jetson_plan)
+
+    def show_jetson_plan(self, plan):
+        dialog = Gtk.Dialog(title="Review direct NVIDIA BSP job", transient_for=self, modal=True)
+        dialog.set_default_size(760, 500)
+        dialog.add_button("Close", Gtk.ResponseType.CANCEL)
+        execute = dialog.add_button("Authorize and run", Gtk.ResponseType.ACCEPT)
+        execute.add_css_class("destructive-action")
+        execute.set_sensitive(False)
+        content = dialog.get_content_area()
+        content.set_spacing(12)
+        for side in ("top", "bottom", "start", "end"):
+            getattr(content, f"set_margin_{side}")(16)
+        details = (plan["scope"] + "\n\n" + plan["identification"] + "\n\n" +
+                   json.dumps(plan["target"], indent=2) + "\n\n" + plan["command_display"] + "\n\n" +
+                   "\n".join(plan["issues"]))
+        view = Gtk.TextView(editable=False, monospace=True, wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        view.get_buffer().set_text(details)
+        scroll = Gtk.ScrolledWindow(vexpand=True, min_content_height=260)
+        scroll.set_child(view)
+        content.append(scroll)
+        content.append(Gtk.Label(label="Type the reviewed token to continue: " + plan["confirmation"], xalign=0, selectable=True))
+        entry = Gtk.Entry(placeholder_text=plan["confirmation"])
+        entry.connect("changed", lambda entry: execute.set_sensitive(plan["can_execute"] and entry.get_text() == plan["confirmation"]))
+        content.append(entry)
+        self.confirmation = dialog
+        self.update_controls()
+
+        def response(dialog, response_id):
+            self.confirmation = None
+            token = entry.get_text()
+            accepted = response_id == Gtk.ResponseType.ACCEPT and plan["can_execute"] and token == plan["confirmation"]
+            dialog.destroy()
+            self.update_controls()
+            if accepted:
+                try:
+                    self.run_jetson_plan(plan, token)
+                except OSError as exc:
+                    self.status.set_text(str(exc))
+        dialog.connect("response", response)
+        dialog.present()
+
+    def run_jetson_plan(self, plan, token):
+        from .jetson_flash import execute_plan
+        directory = Path(GLib.get_user_state_dir()) / "rufus-linux"
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        log = directory / f"jetson-{time.time_ns()}.jsonl"
+        if self.jetson_log_window is not None:
+            self.jetson_log_window.destroy()
+        self.jetson_log_window = Gtk.Window(title=f"NVIDIA BSP log · {log}", transient_for=self,
+                                          default_width=850, default_height=450)
+        view = Gtk.TextView(editable=False, monospace=True, wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        buffer = view.get_buffer()
+        def append(line):
+            buffer.insert(buffer.get_end_iter(), line + "\n")
+            if buffer.get_char_count() > 200000:
+                buffer.delete(buffer.get_start_iter(), buffer.get_iter_at_offset(buffer.get_char_count() - 150000))
+            return False
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_child(view)
+        self.jetson_log_window.set_child(scroll)
+        self.jetson_log_window.present()
+        self.work(lambda: execute_plan(plan, token, log, self.cancel, self.report,
+                                      lambda line: GLib.idle_add(append, line), authorization="pkexec"),
+                  lambda result: self.status.set_text(f"{result['status']} · log: {result['log']}"))
 
     def start_clicked(self, *_):
+        if self.busy or self.confirmation is not None:
+            return
         mode = self.mode.get_selected()
         if mode == 6 and self.jetson_method.get_selected() == 2:
+            self.review_jetson()
+            return
+        if mode == 6 and self.jetson_method.get_selected() == 3:
             from .jetson import launch_sdkmanager
             self.work(launch_sdkmanager)
             return
