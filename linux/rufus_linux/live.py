@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shlex
 import shutil
+import stat
 import tempfile
 import uuid
 
@@ -19,6 +20,7 @@ from .layout import GUID_TYPES
 MANIFESTS = {"/md5sum.txt": "md5", "/MD5SUMS": "md5",
              "/sha256sum.txt": "sha256", "/SHA256SUMS": "sha256"}
 BOOT_DIRS = ("/boot/grub/", "/isolinux/", "/syslinux/", "/EFI/BOOT/")
+MEDIA_CHECK_OPTIONS = ("integrity-check", "verify-checksums")
 
 
 def tool_text(args, cancel=None, limit=4 * MIB):
@@ -55,7 +57,7 @@ def rewrite_config(text):
         if re.match(r"^\s*(?:linux(?:efi|16)?|append)\s", line, re.IGNORECASE):
             command, separator, comment = line.partition("#")
             found = re.search(r"(?<!\S)boot=(casper|live)(?=\s|$)", command)
-            if found and not re.search(r"(?<!\S)(?:nopersistent|nopersistence|integrity-check)(?=\s|$)", command):
+            if found and not re.search(r"(?<!\S)(?:nopersistent|nopersistence|integrity-check|verify-checksums)(?=\s|$)", command):
                 kind = "casper" if found[1] == "casper" else "debian"
                 # Custom persistence stores need a separate workflow; do not
                 # silently create a volume that these options would ignore.
@@ -107,6 +109,8 @@ def stage_configs(source, directory, cancel=None):
             raise RufusError("Unsupported live ISO configuration path.")
         local = directory / f"config-{index}"
         run_tool(iso_command(source, "-osirrox", "on", "-extract", path, str(local)), cancel)
+        if not stat.S_ISREG(local.lstat().st_mode):
+            raise RufusError("Live boot configuration and manifests must be regular files.")
         data = local.read_bytes()
         if b"\0" in data or (path not in MANIFESTS and len(data) > MIB):
             raise RufusError("Unsupported live ISO boot configuration.")
@@ -122,6 +126,9 @@ def stage_configs(source, directory, cancel=None):
             kinds.update(detected)
             count += number
         if modified != text:
+            # Rock Ridge preserves read-only modes on Debian's ISO files.
+            # Only this private extracted copy is made writable.
+            local.chmod(local.stat().st_mode | stat.S_IWUSR)
             local.write_bytes(modified.encode("utf-8"))
             changed[path] = local.read_bytes()
             mapped.extend(["-map", str(local), path])
@@ -188,6 +195,23 @@ def reject_existing_store(source, cancel=None):
             if (block[56:58] == b"\x53\xef" and
                     block[120:136].rstrip(b"\0") in (b"writable", b"casper-rw", b"persistence")):
                 raise RufusError("Source already contains a persistence volume. Select the original live ISO.")
+    return table
+
+
+def appended_partition_number(source, table, replay):
+    # Embedded EFI partitions occupy slots even without -append_partition in
+    # the replay report. Never replace one with a persistence volume.
+    used = [int(n) for n in re.findall(r"^-append_partition (\d+) ", replay, re.MULTILINE)]
+    for partition in table.get("partitions", []):
+        node = partition.get("node", "")
+        suffix = node.removeprefix(str(source)).removeprefix("p")
+        if not node.startswith(str(source)) or not suffix.isdigit() or int(suffix) < 1:
+            raise RufusError("Cannot identify the source ISO's partition slots safely.")
+        used.append(int(suffix))
+    number = max([1, *used]) + 1
+    if number > 4:
+        raise RufusError("ISO has no available appended partition slot for persistence.")
+    return number
 
 
 def validate_volume(image, volume_uuid, size, cancel=None):
@@ -238,12 +262,9 @@ def create_live_image(source, output, persistence_size=1024 * MIB, casper_label=
     modes = firmware_modes(report)
     if not modes or not any(word in report for word in ("grub2-mbr", "isohybrid", "GPT")):
         raise RufusError("ISO boot layout is not supported for persistent hybrid media.")
-    reject_existing_store(source, cancel)
+    original_table = reject_existing_store(source, cancel)
     replay = tool_text(iso_command(source, "-report_el_torito", "cmd"), cancel)
-    used = [int(n) for n in re.findall(r"^-append_partition (\d+) ", replay, re.MULTILINE)]
-    number = max([1, *used]) + 1
-    if number > 4:
-        raise RufusError("ISO has no available appended partition slot for persistence.")
+    number = appended_partition_number(source, original_table, replay)
     with tempfile.TemporaryDirectory(prefix="rufus-live-image-") as directory:
         directory = Path(directory)
         emit(progress, "Preparing live boot options")

@@ -1,8 +1,8 @@
 #!/usr/bin/python3
-"""Opt-in real Casper reboot test in private VM overlays.
+"""Opt-in Casper/Debian live-root reboot tests in private USB VM overlays.
 
 The source ISO and prepared image remain read-only. A test-only initramfs hook
-runs after Casper mounts the real live root, writes a marker through that root,
+runs after the distribution mounts the real live root, writes a marker through that root,
 and checks it on a second boot. Firmware tests remaster a private image with
 that hook, serial console output, and a zero-second GRUB menu timeout.
 """
@@ -10,12 +10,16 @@ that hook, serial console output, and a zero-second GRUB menu timeout.
 import argparse
 import gzip
 import json
+import os
 from pathlib import Path
 import re
+import secrets
+import shlex
 import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from rufus_linux import core, live
@@ -37,29 +41,107 @@ def archive(files):
     return bytes(data)
 
 
-HOOK = b'''#!/bin/sh
+HOOK = '''#!/bin/sh
 if [ "$1" = prereqs ]; then exit 0; fi
-exec >/dev/ttyS0 2>&1
-if ! grep -q ' /cow ext4 ' /proc/mounts; then
-    echo RUFUS_PERSISTENCE_FAIL_NO_EXT4_COW
+console=/dev/ttyS0
+[ -e "${rootmnt}/dev/ttyS0" ] && console="${rootmnt}/dev/ttyS0"
+exec >"$console" 2>&1
+fail() {
+    echo "RUFUS_PERSISTENCE_FAIL_$1"
     cat /proc/mounts
-elif ! grep -q " ${rootmnt} overlay " /proc/mounts; then
-    echo RUFUS_PERSISTENCE_FAIL_NO_ROOT_OVERLAY
-    cat /proc/mounts
-elif [ -e "${rootmnt}/root/rufus-persistence-test" ]; then
-    if [ "$(cat "${rootmnt}/root/rufus-persistence-test")" = rufus-reboot-marker ]; then
-        echo RUFUS_PERSISTENCE_SECOND_BOOT_OK
-    else
-        echo RUFUS_PERSISTENCE_FAIL_WRONG_MARKER
-    fi
-else
-    echo rufus-reboot-marker >"${rootmnt}/root/rufus-persistence-test"
     sync
-    echo RUFUS_PERSISTENCE_FIRST_BOOT_OK
+    poweroff -f
+    exit 1
+}
+if [ '@KIND@' = casper ]; then
+    store=$(awk '$2 == "/cow" && $3 == "ext4" {print $2; exit}' /proc/mounts)
+else
+    store=$(awk '$3 == "ext4" && $2 ~ /\\/live\\/persistence\\// {print $2; exit}' /proc/mounts)
+fi
+[ -n "$store" ] || fail NO_EXT4_STORE
+options=$(awk -v root="$rootmnt" '$2 == root && $3 == "overlay" {options=$4} END {print options}' /proc/mounts)
+[ -n "$options" ] || fail NO_ROOT_OVERLAY
+upper=${options##*upperdir=}
+upper=${upper%%,*}
+case "$upper" in "$store"/*) ;; *) fail WRONG_UPPER_STORE ;; esac
+if [ '@KIND@' = debian ]; then
+    [ "$(cat "$store/persistence.conf")" = '/ union' ] || fail WRONG_UNION_CONFIG
+fi
+marker=root/rufus-persistence-@NONCE@
+if [ -e "${rootmnt}/$marker" ]; then
+    [ "$(cat "${rootmnt}/$marker")" = '@NONCE@' ] || fail WRONG_MARKER
+    result=SECOND
+else
+    echo '@NONCE@' >"${rootmnt}/$marker" || fail WRITE
+    result=FIRST
 fi
 sync
+[ "$(cat "$upper/$marker")" = '@NONCE@' ] || fail MARKER_NOT_IN_EXT4_UPPER
+echo "RUFUS_PERSISTENCE_STORE @KIND@ $store $upper"
+echo "RUFUS_PERSISTENCE_${result}_BOOT_OK"
 poweroff -f
 '''
+
+
+def iso_paths(iso):
+    return shlex.split(live.tool_text(live.iso_command(iso, "-find", "/", "-type", "f", "-exec", "echo", "--")))
+
+
+def select_path(paths, explicit, preferred, prefix):
+    if explicit:
+        if explicit not in paths:
+            raise RuntimeError(f"ISO does not contain {explicit}.")
+        return explicit
+    for path in preferred:
+        if path in paths:
+            return path
+    candidates = [p for p in paths if p.startswith(prefix)]
+    if len(candidates) != 1:
+        raise RuntimeError(f"Specify an explicit kernel/initrd path; ambiguous {prefix} files.")
+    return candidates[0]
+
+
+def instrument_initrd(initrd, root, kind, nonce):
+    """Keep Casper's established root-mount checkpoint; run Debian init-bottom."""
+    expanded = root / "initrd-tree"
+    core.run_tool(["unmkinitramfs", str(initrd), str(expanded)])
+    stage = "casper-bottom" if kind == "casper" else "init-bottom"
+    order_path = f"scripts/{stage}/ORDER"
+    candidates = [p for p in expanded.rglob("ORDER") if p.as_posix().endswith("/" + order_path)]
+    if len(candidates) != 1 or candidates[0].is_symlink():
+        raise RuntimeError(f"Harness needs one initramfs-tools {stage} ORDER file.")
+    order = candidates[0].read_bytes()
+    hook_path = f"scripts/{stage}/rufus-persistence-test"
+    hook = HOOK.replace("@KIND@", kind).replace("@NONCE@", nonce).encode()
+    call = f'/{hook_path} "$@"\n'.encode()
+    # Casper's existing checks stop before vendor user/desktop customization.
+    # Debian's later checkpoint runs all original init-bottom scripts first.
+    order = call + order if kind == "casper" else order.rstrip(b"\n") + b"\n" + call
+    initrd.chmod(0o600)
+    with initrd.open("ab") as stream:
+        stream.write(gzip.compress(archive([(hook_path, hook, stat.S_IFREG | 0o755),
+            (order_path, order, stat.S_IFREG | 0o644)])))
+    shutil.rmtree(expanded)
+
+
+def instrument_config(text, kind):
+    if kind == "casper":
+        # Plymouth's graphical handoff can wait indefinitely in a headless VM.
+        # Keep the distribution's scripts, using its ordinary text boot path.
+        text = "".join(re.sub(r'(?<!\S)(?:"(?:quiet|splash)"|quiet|splash)(?=\s|$)', "", line)
+                       if re.match(r"^\s*(?:linux(?:efi|16)?|append)\s", line, re.I) else line
+                       for line in text.splitlines(keepends=True))
+    boot = "boot=casper" if kind == "casper" else "boot=live"
+    flags = "console=ttyS0,115200 panic=-1" + (" ip=frommedia" if kind == "casper" else "")
+    # Generated GRUB entries quote every word; source GRUB/Syslinux use bare words.
+    quoted = '"' + boot + '"'
+    count = text.count(quoted)
+    if count:
+        text = text.replace(quoted, quoted + ' "' + flags.replace(" ", '" "') + '"')
+    text, bare = re.subn(r"(?<!\S)" + re.escape(boot) + r"(?=\s|$)", boot + " " + flags, text)
+    text = re.sub(r"(?mi)^\s*set\s+timeout=.*$", "set timeout=0", text)
+    text = re.sub(r"(?mi)^\s*timeout\s+\d+.*$", "TIMEOUT 1", text)
+    return text, count + bare
 
 
 def main():
@@ -67,8 +149,10 @@ def main():
     parser.add_argument("iso", type=Path)
     parser.add_argument("--prepared", type=Path, help="existing Rufus live image, used as a read-only backing file")
     parser.add_argument("--output-dir", required=True, type=Path, help="NEW directory for image, overlay, and logs")
-    parser.add_argument("--kernel-path", default="/casper/vmlinuz")
-    parser.add_argument("--initrd-path", default="/casper/initrd.gz")
+    parser.add_argument("--kernel-path", help="auto-detected from Casper/Debian live paths by default")
+    parser.add_argument("--initrd-path", help="auto-detected; identical initrd aliases are instrumented together")
+    parser.add_argument("--kind", choices=("auto", "casper", "debian"), default="auto")
+    parser.add_argument("--negative-control", action="store_true", help="also prove disabled persistence cannot pass")
     parser.add_argument("--timeout", type=int, default=240, help="seconds per boot")
     parser.add_argument("--firmware", choices=("direct", "bios", "uefi", "all"), default="direct")
     parser.add_argument("--layout", choices=("hybrid", "extract"), default="hybrid")
@@ -82,6 +166,16 @@ def main():
     bios, firmware = firmware_paths(qemu)
     root = args.output_dir.resolve()
     root.mkdir(parents=True, exist_ok=False)
+    args.iso = args.iso.resolve()
+    source_hash = core.checksum(args.iso)
+    with tempfile.TemporaryDirectory(prefix="rufus-live-detect-") as directory:
+        kind = live.stage_configs(args.iso, Path(directory))[0]
+    if args.kind != "auto" and args.kind != kind:
+        raise RuntimeError("The ISO's live family does not match --kind.")
+    paths = iso_paths(args.iso)
+    prefix = "/casper/" if kind == "casper" else "/live/"
+    args.kernel_path = select_path(paths, args.kernel_path, [prefix + "vmlinuz"], prefix + "vmlinuz")
+    args.initrd_path = select_path(paths, args.initrd_path, [prefix + "initrd.gz", prefix + "initrd.img", prefix + "initrd"], prefix + "initrd")
     prepared = args.prepared.resolve() if args.prepared else root / "live.img"
     if not args.prepared:
         if args.layout == "extract":
@@ -89,49 +183,64 @@ def main():
             create_extracted_image(args.iso, prepared, persistence_size=256 * live.MIB, bootloader=args.bootloader)
         else:
             live.create_live_image(args.iso, prepared, 256 * live.MIB)
+    prepared_hash = core.checksum(prepared)
     kernel, initrd = root / "vmlinuz", root / "test-initrd"
     core.run_tool(live.iso_command(args.iso.resolve(), "-osirrox", "on", "-extract", args.kernel_path, str(kernel),
                                    "-extract", args.initrd_path, str(initrd)))
-    hook_path = "scripts/casper-bottom/99-rufus-persistence-test"
-    order = f'/{hook_path} "$@"\n'.encode()
-    with initrd.open("ab") as stream:
-        stream.write(gzip.compress(archive([(hook_path, HOOK, stat.S_IFREG | 0o755),
-                                           ("scripts/casper-bottom/ORDER", order, stat.S_IFREG | 0o644)])))
+    original_initrd_hash = core.checksum(initrd)
+    initrd_paths = [args.initrd_path]
+    for path in paths:
+        if path.startswith(prefix + "initrd") and path != args.initrd_path:
+            alias = root / "initrd-alias"
+            core.run_tool(live.iso_command(args.iso, "-osirrox", "on", "-extract", path, str(alias)))
+            if core.checksum(alias) == original_initrd_hash:
+                initrd_paths.append(path)
+            alias.unlink()
+    nonce = secrets.token_hex(16)
+    instrument_initrd(initrd, root, kind, nonce)
     modes = ("bios", "uefi") if args.firmware == "all" else (args.firmware,)
     backing = prepared
     if args.firmware != "direct":
-        config = root / "grub.cfg"
+        mappings = []
         if args.layout == "extract":
-            core.run_tool(["mcopy", "-i", f"{prepared}@@{live.MIB}", "::/boot/rufus/grub.cfg", str(config)])
+            configs = ["/boot/rufus/grub.cfg"]
+            # Read the generated loader rather than trusting the caller's auto setting.
+            probe = subprocess.run(["mcopy", "-i", f"{prepared}@@{live.MIB}", "::/boot/rufus/syslinux.cfg", str(root / "syslinux-probe")],
+                                   stdin=subprocess.DEVNULL, capture_output=True)
+            if probe.returncode == 0:
+                configs.append("/boot/rufus/syslinux.cfg")
         else:
-            core.run_tool(live.iso_command(prepared, "-osirrox", "on", "-extract", "/boot/grub/grub.cfg", str(config)))
-        text = config.read_text()
-        if args.layout == "extract":
-            count = text.count('"boot=casper"')
-            text = text.replace('"boot=casper"', '"boot=casper" "console=ttyS0" "ip=frommedia"')
-        else:
-            text, count = re.subn(r"(?<!\S)boot=casper(?=\s|$)", "boot=casper console=ttyS0 ip=frommedia", text)
+            configs = [p for p in paths if p.startswith(live.BOOT_DIRS) and p.lower().endswith(".cfg")]
+        count = 0
+        for index, path in enumerate(configs):
+            config = root / f"config-{index}.cfg"
+            if args.layout == "extract":
+                core.run_tool(["mcopy", "-i", f"{prepared}@@{live.MIB}", "::" + path, str(config)])
+            else:
+                core.run_tool(live.iso_command(prepared, "-osirrox", "on", "-extract", path, str(config)))
+            text, number = instrument_config(config.read_text(), kind)
+            count += number
+            if path.startswith(("/isolinux/", "/syslinux/")) or path.endswith("syslinux.cfg"):
+                text = "SERIAL 0 115200\n" + text
+            else:
+                text = ("serial --unit=0 --speed=115200\nterminal_input serial\nterminal_output serial\n"
+                        "set timeout=0\nset timeout_style=hidden\n" + text)
+            config.chmod(0o600)
+            config.write_text(text)
+            mappings.append((config, path))
         if not count:
-            raise RuntimeError("Firmware harness needs a Casper GRUB configuration.")
-        text = re.sub(r"(?m)^\s*set\s+timeout=.*$", "set timeout=0", text)
-        config.write_text("serial --unit=0 --speed=115200\nterminal_input serial\nterminal_output serial\n"
-                          "set timeout=0\nset timeout_style=hidden\n" + text)
+            raise RuntimeError("Firmware harness found no live kernel entries.")
+        mappings.extend((initrd, path) for path in initrd_paths)
         backing = root / "firmware-test.img"
         if args.layout == "extract":
             shutil.copyfile(prepared, backing)
-            core.run_tool(["mcopy", "-o", "-i", f"{backing}@@{live.MIB}", str(config), "::/boot/rufus/grub.cfg"])
-            core.run_tool(["mcopy", "-o", "-i", f"{backing}@@{live.MIB}", str(initrd), "::" + args.initrd_path])
-            if args.bootloader == "syslinux":
-                syslinux_config = root / "syslinux.cfg"
-                core.run_tool(["mcopy", "-i", f"{prepared}@@{live.MIB}", "::/boot/rufus/syslinux.cfg", str(syslinux_config)])
-                text = syslinux_config.read_text()
-                text = re.sub(r"(?m)^\s*(?:TIMEOUT|SERIAL)\s+.*$", "", text)
-                text = re.sub(r"(?<!\S)boot=casper(?=\s|$)", "boot=casper console=ttyS0 ip=frommedia", text)
-                syslinux_config.write_text("SERIAL 0 115200\nTIMEOUT 1\n" + text)
-                core.run_tool(["mcopy", "-o", "-i", f"{backing}@@{live.MIB}", str(syslinux_config), "::/boot/rufus/syslinux.cfg"])
+            for local, path in mappings:
+                core.run_tool(["mcopy", "-o", "-i", f"{backing}@@{live.MIB}", str(local), "::" + path])
         else:
-            core.run_tool(live.iso_command(prepared, "-outdev", str(backing), "-map", str(config), "/boot/grub/grub.cfg",
-                                           "-map", str(initrd), args.initrd_path, "-boot_image", "any", "replay", "-end"))
+            mapping_args = [word for local, path in mappings for word in ("-map", str(local), path)]
+            core.run_tool(live.iso_command(prepared, "-outdev", str(backing), *mapping_args,
+                                          "-boot_image", "any", "replay", "-end"))
+    backing_hash = core.checksum(backing)
     for mode in modes:
         overlay = root / f"{mode}-persistence.qcow2"
         core.run_tool([qemu_img, "create", "-f", "qcow2", "-F", "raw", "-b", str(backing), str(overlay)])
@@ -145,29 +254,57 @@ def main():
         else:
             machine, boot_args = "pc,accel=tcg", ["-bios", str(bios)]
             if mode == "direct":
+                boot = "boot=casper persistent" if kind == "casper" else "boot=live persistence"
                 boot_args += ["-kernel", str(kernel), "-initrd", str(initrd), "-append",
-                              "boot=casper persistent console=ttyS0 fsck.mode=skip ip=frommedia panic=-1"]
+                              boot + " console=ttyS0,115200 fsck.mode=skip panic=-1" + (" ip=frommedia" if kind == "casper" else "")]
         for number, expected in ((1, b"RUFUS_PERSISTENCE_FIRST_BOOT_OK"), (2, b"RUFUS_PERSISTENCE_SECOND_BOOT_OK")):
-            print(f"Booting real Casper live root via {mode}, pass {number}", flush=True)
+            print(f"Booting real {kind} live root via USB/{mode}, pass {number}", flush=True)
             log = root / f"{mode}-boot-{number}.log"
-            command = [qemu, "-machine", machine, "-m", "2048", "-smp", "2", "-nodefaults", "-nic", "none",
+            command = [qemu, "-machine", machine, "-cpu", "max", "-m", "2048", "-smp", "2", "-nodefaults", "-nic", "none",
                        "-display", "none", "-serial", "stdio", "-monitor", "none", "-no-reboot",
                        "-L", str(firmware), "-device", "VGA,romfile=" + str(bios.parent / "vgabios-stdvga.bin"),
-                       *boot_args, "-drive", "if=ide,format=qcow2,file=" + str(overlay).replace(",", ",,")]
+                       *boot_args, "-device", "qemu-xhci", "-drive", "if=none,id=stick,format=qcow2,file=" + str(overlay).replace(",", ",,"),
+                       "-device", "usb-storage,drive=stick,bootindex=1"]
             with log.open("xb") as stream:
                 try:
                     result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=stream, stderr=subprocess.STDOUT,
-                                            timeout=args.timeout)
+                                            timeout=args.timeout, env={**os.environ, "TMPDIR": str(root)})
                 except subprocess.TimeoutExpired as exc:
-                    raise AssertionError(f"Casper {mode} boot {number} timed out; inspect {log}") from exc
+                    raise AssertionError(f"{kind} {mode} boot {number} timed out; inspect {log}") from exc
             data = log.read_bytes()
             if result.returncode or expected not in data or b"RUFUS_PERSISTENCE_FAIL" in data:
-                raise AssertionError(f"Casper {mode} boot {number} failed; inspect {log}: " +
+                raise AssertionError(f"{kind} {mode} boot {number} failed; inspect {log}: " +
                                      data[-3000:].decode(errors="replace"))
             print(f"PASS: {mode}: {expected.decode()}", flush=True)
-    (root / "result.json").write_text(json.dumps({"iso": str(args.iso.resolve()), "prepared": str(prepared),
-                                                  "boots": 2 * len(modes), "persistence": "passed", "boot_method": modes,
-                                                  "source_images_modified": False}, indent=2) + "\n")
+    if args.negative_control:
+        overlay = root / "without-persistence.qcow2"
+        core.run_tool([qemu_img, "create", "-f", "qcow2", "-F", "raw", "-b", str(backing), str(overlay)])
+        boot = "boot=casper nopersistent" if kind == "casper" else "boot=live nopersistence"
+        log = root / "without-persistence.log"
+        command = [qemu, "-machine", "pc,accel=tcg", "-cpu", "max", "-m", "2048", "-smp", "2",
+                   "-nodefaults", "-nic", "none", "-display", "none", "-serial", "stdio", "-monitor", "none",
+                   "-no-reboot", "-L", str(firmware), "-bios", str(bios), "-kernel", str(kernel), "-initrd", str(initrd),
+                   "-append", boot + " console=ttyS0,115200 panic=-1" + (" ip=frommedia" if kind == "casper" else ""),
+                   "-device", "qemu-xhci", "-drive", "if=none,id=stick,format=qcow2,file=" + str(overlay).replace(",", ",,"),
+                   "-device", "usb-storage,drive=stick"]
+        with log.open("xb") as stream:
+            result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=stream, stderr=subprocess.STDOUT,
+                                    timeout=args.timeout, env={**os.environ, "TMPDIR": str(root)})
+        data = log.read_bytes()
+        if result.returncode or b"RUFUS_PERSISTENCE_FAIL_NO_EXT4_STORE" not in data or b"_BOOT_OK" in data:
+            raise AssertionError(f"Disabled-persistence control did not fail as expected; inspect {log}")
+        print("PASS: disabled persistence cannot satisfy the live-root check", flush=True)
+    if core.checksum(args.iso) != source_hash or core.checksum(prepared) != prepared_hash or core.checksum(backing) != backing_hash:
+        raise AssertionError("A read-only source/prepared/backing image changed during the test.")
+    (root / "result.json").write_text(json.dumps({"iso": str(args.iso.resolve()), "prepared": str(prepared), "kind": kind,
+                                                  "source_sha256": source_hash, "prepared_sha256": prepared_hash,
+                                                  "layout": args.layout, "bootloader": args.bootloader,
+                                                  "initrd_paths": initrd_paths, "marker_nonce": nonce,
+                                                  "check_stage": "before-casper-bottom" if kind == "casper" else "after-init-bottom",
+                                                  "boots": 2 * len(modes) + int(args.negative_control),
+                                                  "negative_control": "passed" if args.negative_control else "not run",
+                                                  "persistence": "passed", "boot_method": modes,
+                                                  "physical_storage_used": False, "source_images_modified": False}, indent=2) + "\n")
 
 
 if __name__ == "__main__":

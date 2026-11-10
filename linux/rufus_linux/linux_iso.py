@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shlex
 import shutil
+import stat
 import tempfile
 
 from .backup import new_output
@@ -15,7 +16,7 @@ from .core import (FAT_MAX_FILE, RufusError, check_cancel, checksums, checksum, 
                    image_filesystems, run_tool, source_file, validate_fat_tree)
 from . import grub
 from .layout import Partition, write_layout
-from .live import MANIFESTS, iso_command, tool_text, validate_persistence
+from .live import MANIFESTS, MEDIA_CHECK_OPTIONS, iso_command, tool_text, validate_persistence
 from .windows import case_path
 
 
@@ -66,6 +67,47 @@ def tree_file(root, path):
     return result
 
 
+def prepare_extracted_tree(root, cancel=None):
+    """Make private ISO copies editable without following any directory links."""
+    root = root.resolve()
+    root.chmod(root.stat().st_mode | stat.S_IRWXU)
+    omitted = []
+    alias = root / "debian"
+    # Debian's CD-compatibility alias loops back to the ISO root. FAT cannot
+    # represent it; the live root and generated loaders do not use it.
+    if alias.is_symlink() and os.readlink(alias) == ".":
+        alias.unlink()
+        omitted.append("debian")
+    for directory, dirs, files in os.walk(root, followlinks=False):
+        for name in dirs + files:
+            check_cancel(cancel)
+            path = Path(directory) / name
+            mode = path.lstat().st_mode
+            if stat.S_ISLNK(mode):
+                try:
+                    target = path.resolve(strict=True)
+                except (OSError, RuntimeError):
+                    continue  # validate_fat_tree reports broken links and loops.
+                if (path.parent == root / "dists" and path.name in ("stable", "testing", "unstable") and
+                        target.parent == root / "dists" and target.is_dir()):
+                    # These Debian package-index aliases serve CD installers,
+                    # not live boot. Keep the real suite directory once.
+                    path.unlink()
+                    omitted.append(path.relative_to(root).as_posix())
+                    continue
+                if target.is_relative_to(root.resolve()) and stat.S_ISREG(target.stat().st_mode):
+                    # FAT has no symlinks. Copy only regular files whose final
+                    # resolved target stays inside this private extracted tree.
+                    path.unlink()
+                    shutil.copyfile(target, path)
+                    mode = path.lstat().st_mode
+            if stat.S_ISDIR(mode):
+                path.chmod(mode | stat.S_IRWXU)
+            elif stat.S_ISREG(mode):
+                path.chmod(mode | stat.S_IRUSR | stat.S_IWUSR)
+    return sorted(omitted)
+
+
 def menu_entries(root, text):
     entries, title, body, depth = [], None, [], 0
     for line in re.sub(r"\\\r?\n", " ", text).splitlines():
@@ -114,7 +156,7 @@ def boot_arguments(entry, persistence):
         arguments.insert(0, "boot=casper")
     disabled = "nopersistent" if entry.kind == "casper" else "nopersistence"
     option = "persistent" if entry.kind == "casper" else "persistence"
-    if disabled not in arguments and "integrity-check" not in arguments:
+    if disabled not in arguments and not any(option in arguments for option in MEDIA_CHECK_OPTIONS):
         before = next((i for i, word in enumerate(arguments) if word in ("--", "---")), len(arguments))
         arguments.insert(before, option if persistence else disabled)
     return arguments
@@ -199,6 +241,7 @@ def create_extracted_image(source, output, size=None, persistence_size=0, casper
         root.mkdir()
         emit(progress, "Extracting Linux live ISO")
         run_tool(iso_command(source, "-osirrox", "on", "-extract", "/", str(root)), cancel)
+        omitted_aliases = prepare_extracted_tree(root, cancel)
         files, names = validate_fat_tree(root)
         primary = names.get("boot/grub/grub.cfg") or names.get("efi/boot/grub.cfg")
         syslinux_primary = next((names[p] for p in syslinux.CONFIGS if p in names), None)
@@ -317,4 +360,5 @@ def create_extracted_image(source, output, size=None, persistence_size=0, casper
             "source_bootloader": source_bootloader, "syslinux_version": syslinux_version,
             "source_syslinux_version": menu.source_version if menu else None,
             "source_configs": list(menu.configs) if menu else ["/" + primary.relative_to(root).as_posix()],
+            "omitted_aliases": omitted_aliases,
             "omitted_syslinux_labels": list(menu.omitted_labels) if menu else []}

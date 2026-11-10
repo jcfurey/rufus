@@ -84,6 +84,24 @@ class ConfigTests(unittest.TestCase):
                                 "APPEND initrd=/casper/missing boot=casper\nINITRD /casper/initrd\n")
         self.assertEqual(syslinux.read_menu(self.root, self.primary).entries[0].initrds, ("/casper/initrd",))
 
+    def test_repeated_utility_labels_in_submenus_keep_the_root_live_default(self):
+        self.primary.write_text("DEFAULT vesamenu.c32\nLABEL live\nMENU LABEL Debian Live\nMENU DEFAULT\n"
+            "LINUX /casper/vmlinuz\nINITRD /casper/initrd\nAPPEND boot=live\n"
+            "MENU BEGIN install\nMENU LABEL Installer submenu\nLABEL mainmenu\nMENU EXIT\nMENU END\n"
+            "MENU BEGIN utilities\nMENU LABEL Utilities submenu\nLABEL mainmenu\nMENU EXIT\nMENU END\n")
+        menu = syslinux.read_menu(self.root, self.primary)
+        self.assertEqual(menu.entries[0].title, "Debian Live")
+        self.assertEqual(menu.entries[0].kind, "debian")
+        self.assertEqual(menu.omitted_labels, ("mainmenu", "mainmenu"))
+
+    def test_ambiguous_live_labels_and_malformed_submenus_are_refused(self):
+        original = self.primary.read_text()
+        for suffix in ("MENU END\n", "MENU BEGIN missing_end\n", "MENU BEGIN submenu\nMENU DEFAULT\nMENU END\n",
+                       "MENU BEGIN submenu\nLABEL live\nLINUX /casper/vmlinuz\nINITRD /casper/initrd\nAPPEND boot=live\nMENU END\n"):
+            self.primary.write_text(original + suffix)
+            with self.subTest(suffix=suffix), self.assertRaises(core.RufusError):
+                syslinux.read_menu(self.root, self.primary)
+
     def test_relative_parent_paths_stay_inside_iso_and_ui_respects_global_default(self):
         self.primary.write_text("UI menu.c32\nDEFAULT second\nLABEL first\nKERNEL ../casper/vmlinuz\n"
                                 "INITRD ../casper/initrd\nLABEL second\nKERNEL ../casper/vmlinuz\nINITRD ../casper/early\n")

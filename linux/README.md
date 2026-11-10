@@ -32,7 +32,7 @@ To create an Ubuntu package:
 
 ```sh
 make -C linux deb
-sudo apt install ./linux/dist/rufus-linux_0.10.0_all.deb
+sudo apt install ./linux/dist/rufus-linux_0.11.0_all.deb
 ```
 
 Alternatively, install the application and desktop launcher for your user:
@@ -193,6 +193,10 @@ and the `writable` filesystem label. Select **Older Casper (casper-rw)** or pass
 boot option, a volume labeled `persistence`, and `/ union` in `persistence.conf`.
 See the [Casper manual](https://manpages.ubuntu.com/manpages/noble/man7/casper.7.html)
 and [Debian persistence documentation](https://live-team.pages.debian.net/live-manual/html/live-manual/customizing-run-time-behaviours.en.html).
+Debian Live preparation handles read-only ISO files and retains embedded EFI
+partition slots when appending persistence. Extracted media copies safe internal
+file links and reports omitted CD-layout aliases. Real Debian BIOS/UEFI reboot
+checks and their scope are documented in [PERSISTENCE.md](PERSISTENCE.md).
 
 This mode rebuilds the ISO with xorriso's boot-equipment replay and appends an
 ext4 volume. Its live files remain on ISO9660; it does not extract them to a
@@ -277,10 +281,13 @@ make -C linux smoke-test  # briefly opens and closes the GTK application
 make -C linux gui-test    # GTK interaction and background checksum test; no drives opened
 make -C linux boot-test   # optional QEMU/SeaBIOS FreeDOS boot tests, no root
 make -C linux uefi-test   # optional QEMU/OVMF FAT32 and UEFI:NTFS boot tests, no root
-# Optional real Casper ISO: two boots per firmware, private VM overlays, no root.
+# Optional Casper/Debian ISO: two boots per firmware plus a disabled-persistence
+# control. Needs unmkinitramfs (initramfs-tools-core), QEMU and media tools.
 # LIVE_OUTPUT must be a NEW directory. No ISO is downloaded by the test.
 make -C linux live-test LIVE_ISO=/path/to/DragonOS_Resolute_R2.2.iso \
     LIVE_OUTPUT=build/dragonos-reboot-test
+make -C linux live-test LIVE_ISO=/path/to/debian-live.iso LIVE_KIND=debian \
+    LIVE_OUTPUT=build/debian-reboot-test
 sudo make -C linux integration # optional: one authorization for a disposable-loop test matrix
 ```
 
@@ -495,3 +502,27 @@ persistence implementation and boot testing remain on the parity checklist.
   formatting were not exercised. Native ARM CI execution and Windows/macOS
   interoperability remain separate validation work. See [FORMATTING.md](FORMATTING.md).
 - Results and boot logs are under ignored `linux/build/real-media/filesystems-*`.
+
+### Version 0.11 validation
+
+- All 227 automated tests passed. Regressions cover read-only Debian ISO files,
+  retained embedded EFI partition slots, safe internal-file copying and rejected
+  external/cyclic links, media-check options, and static Syslinux submenu scopes.
+- Official Debian Live 13.7.0 amd64 standard matched its published SHA-256.
+  Hybrid, extracted GRUB and extracted Syslinux media each passed real live-root
+  write/reboot/read checks through BIOS and UEFI USB boot: twelve positive
+  firmware boots. A disabled-persistence control correctly fails the root check.
+- The harness preserves Debian's original init-bottom scripts, instruments
+  identical initrd aliases together, verifies a fresh marker in the ext4 upper
+  directory, and checks source/prepared/backing hashes after the VM runs.
+- Real ARM32 and ARM64 kernels again boot through UEFI, USB and generated FAT32
+  media. The cached DragonOS live root also passes BIOS/UEFI persistence reboots
+  and a disabled-persistence control at its established pre-customization
+  checkpoint. Later DragonOS user/init customization remains unvalidated.
+- The 0.11.0 executable archive and Debian package build, GTK checks pass, and
+  packaged Debian preparation passes an independent SHA-256, EFI partition and
+  ext4-label check. No physical storage was used.
+- Logs and results are under ignored `linux/build/real-media/debian-*`,
+  `dragonos-regression-0.11-final`, `arm64-uefi-0.11` and `arm32-uefi-0.11`.
+  Full userspace, full ARM live-root persistence, Secure Boot, remote native ARM
+  CI and physical USB validation remain acceptance work. See [PERSISTENCE.md](PERSISTENCE.md).

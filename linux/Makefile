@@ -1,11 +1,12 @@
 PYTHON ?= /usr/bin/python3
 PREFIX ?= /usr/local
 DESTDIR ?=
-VERSION = 0.10.0
+VERSION = 0.11.0
 LIVE_ISO ?=
 LIVE_OUTPUT ?= build/live-reboot-test
 LIVE_LAYOUT ?= hybrid
 LIVE_BOOTLOADER ?= auto
+LIVE_KIND ?= auto
 SYSLINUX_KERNEL ?=
 SYSLINUX_OUTPUT ?= build/syslinux-boot-test
 WTG_IMAGE ?=
@@ -49,7 +50,7 @@ uefi-test:
 	$(PYTHON) tests/uefi_smoke.py
 
 live-test:
-	$(PYTHON) tests/live_smoke.py "$(LIVE_ISO)" --output-dir "$(LIVE_OUTPUT)" --firmware all --layout "$(LIVE_LAYOUT)" --bootloader "$(LIVE_BOOTLOADER)"
+	$(PYTHON) tests/live_smoke.py "$(LIVE_ISO)" --output-dir "$(LIVE_OUTPUT)" --firmware all --layout "$(LIVE_LAYOUT)" --bootloader "$(LIVE_BOOTLOADER)" --kind "$(LIVE_KIND)" --negative-control
 
 syslinux-test:
 	$(PYTHON) tests/syslinux_smoke.py --kernel "$(SYSLINUX_KERNEL)" --output-dir "$(SYSLINUX_OUTPUT)"

@@ -96,15 +96,16 @@ def read_menu(root, primary, cancel=None):
 
     labels, current, global_append, default, serial, timeout = [], None, (), None, None, 50
     ui, menu_default = False, None
+    scopes, scope_number = [], 0
     ignored = {"prompt", "display", "say", "font", "kbdmap", "console", "nohalt"}
     for words in expand(primary):
         command, args = words[0].lower(), words[1:]
         if command == "label":
             if len(args) != 1 or not re.fullmatch(r"[A-Za-z0-9_.+-]+", args[0]) or len(labels) >= 64:
                 raise RufusError("Syslinux requires conventional, unique Linux labels (maximum 64).")
-            if any(label["label"] == args[0] for label in labels):
+            if any(label["label"] == args[0] and label["scope"] == tuple(scopes) for label in labels):
                 raise RufusError("Syslinux configuration contains duplicate labels.")
-            current = {"label": args[0], "title": args[0], "append": global_append, "initrd": None, "kernel": None}
+            current = {"label": args[0], "scope": tuple(scopes), "title": args[0], "append": global_append, "initrd": None, "kernel": None}
             labels.append(current)
         elif command in ("linux", "kernel", "com32", "comboot", "localboot", "config", "boot", "bss", "pxe", "fdimage"):
             if current is None or len(args) != 1:
@@ -121,14 +122,30 @@ def read_menu(root, primary, cancel=None):
                 raise RufusError("Syslinux INITRD must belong to a label and name comma-separated files.")
             current["initrd"] = args[0]
         elif command == "menu":
+            if args and args[0].lower() == "begin":
+                if len(args) > 2 or len(scopes) >= 8:
+                    raise RufusError("Syslinux submenus are too deeply nested or malformed.")
+                scope_number += 1
+                scopes.append(scope_number)
+                current = None
+                continue
+            if [a.lower() for a in args] == ["end"]:
+                if not scopes:
+                    raise RufusError("Syslinux MENU END has no matching MENU BEGIN.")
+                scopes.pop()
+                current = None
+                continue
             if args and args[0].lower() in ("passwd", "master", "disable", "goto", "save"):
                 raise RufusError("Syslinux menu access controls or dynamic selection require hybrid or DD mode.")
             if args and args[0].lower() == "label" and current is not None:
                 current["title"] = " ".join(args[1:]).replace("^", "")
-            elif [a.lower() for a in args] == ["default"] and current is not None:
-                menu_default = current["label"]
+            elif [a.lower() for a in args] == ["default"]:
+                if current is None:
+                    raise RufusError("Syslinux submenu defaults require hybrid or DD mode.")
+                if not scopes:
+                    menu_default = current["label"]
         elif command == "default":
-            if len(args) != 1:
+            if len(args) != 1 or scopes:
                 raise RufusError("Syslinux DEFAULT must name one label or menu module.")
             default = args[0]
         elif command == "ui":
@@ -146,6 +163,8 @@ def read_menu(root, primary, cancel=None):
             serial = (int(args[0]), int(args[1]) if len(args) == 2 else 9600)
         elif command not in ignored and not re.fullmatch(r"f(?:[1-9]|1[0-2])", command):
             raise RufusError(f"Unsupported Syslinux directive '{command}'; use hybrid or DD mode.")
+    if scopes:
+        raise RufusError("Syslinux MENU BEGIN has no matching MENU END.")
     entries, supported, omitted = [], [], []
     for label in labels:
         if label["kernel"] is None:
@@ -157,6 +176,8 @@ def read_menu(root, primary, cancel=None):
         if kind is None:
             omitted.append(label["label"])
             continue
+        if label["label"] in supported:
+            raise RufusError("Syslinux live labels repeated across submenus are ambiguous; use hybrid or DD mode.")
         initrd_args = [arg.split("=", 1)[1] for arg in arguments if arg.startswith("initrd=")]
         initrd = label["initrd"] if label["initrd"] is not None else initrd_args[-1] if initrd_args else ""
         if not initrd:

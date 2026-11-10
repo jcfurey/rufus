@@ -15,6 +15,36 @@ from rufus_linux import core, live
 
 
 class LiveConfigTests(unittest.TestCase):
+    def test_vm_console_flags_do_not_request_networking_on_debian(self):
+        from live_smoke import instrument_config
+        for text in ('linux /live/vmlinuz boot=live persistence quiet\n',
+                     'linux "/live/vmlinuz" "boot=live" "persistence" "quiet"\n'):
+            result, count = instrument_config(text, "debian")
+            self.assertEqual(count, 1)
+            self.assertIn("console=ttyS0,115200", result)
+            self.assertNotIn("ip=frommedia", result)
+
+    def test_casper_vm_uses_text_boot_without_removing_persistence(self):
+        from live_smoke import instrument_config
+        for text in ('APPEND boot=casper persistent quiet splash\n',
+                     'linux "/casper/vmlinuz" "boot=casper" "persistent" "quiet" "splash"\n'):
+            result, count = instrument_config(text, "casper")
+            self.assertEqual(count, 1)
+            self.assertIn("persistent", result)
+            self.assertIn("ip=frommedia", result)
+            self.assertNotIn("splash", result)
+            self.assertNotIn("quiet", result)
+
+    def test_embedded_efi_and_sparse_partition_slots_cannot_be_replaced(self):
+        source = Path("/tmp/source9.iso")
+        for slots, replay, expected in (((1, 2), "", 3), ((1, 3), "", 4),
+                                        ((1,), "-append_partition 2 0xef file\n", 3)):
+            table = {"partitions": [{"node": str(source) + str(slot)} for slot in slots]}
+            self.assertEqual(live.appended_partition_number(source, table, replay), expected)
+        for nodes in ((str(source) + "4",), ("/tmp/other.iso2",)):
+            with self.assertRaises(core.RufusError):
+                live.appended_partition_number(source, {"partitions": [{"node": node} for node in nodes]}, "")
+
     def test_casper_and_debian_options_precede_end_of_kernel_options(self):
         for boot, option, kind in (("casper", "persistent", "casper"), ("live", "persistence", "debian")):
             for command in ("linux /casper/vmlinuz", "linuxefi /live/vmlinuz", "  APPEND"):
@@ -29,6 +59,7 @@ class LiveConfigTests(unittest.TestCase):
                 "echo boot=casper\n"
                 "linux /casper/vmlinuz boot=casper nopersistent\n"
                 "linux /casper/vmlinuz boot=casper integrity-check\n"
+                "linux /live/vmlinuz boot=live verify-checksums\n"
                 "append boot=live nopersistence\n")
         self.assertEqual(live.rewrite_config(text), (text, set(), 0))
 
@@ -76,7 +107,7 @@ class LiveImageTests(unittest.TestCase):
         self.iso = self.root / "fixture.iso"
         self.output = self.root / "live.img"
 
-    def fixture(self, kind="casper", extra="", bios=False):
+    def fixture(self, kind="casper", extra="", bios=False, readonly=False):
         config = f"linux /casper/vmlinuz boot={kind} quiet ---\ninitrd /casper/initrd\n" + extra
         (self.tree / "boot/grub/grub.cfg").write_text(config)
         self.original_hash = hashlib.sha256(config.encode()).hexdigest()
@@ -89,11 +120,23 @@ class LiveImageTests(unittest.TestCase):
             bios_args = ["-b", "boot/grub/eltorito.img", "-no-emul-boot", "-boot-load-size", "4",
                          "-boot-info-table", "-eltorito-alt-boot"]
         (self.tree / "SHA256SUMS").write_text(manifest)
+        if readonly:
+            (self.tree / "boot/grub/grub.cfg").chmod(0o444)
+            (self.tree / "SHA256SUMS").chmod(0o444)
         subprocess.run(["xorriso", "-as", "mkisofs", "-R", "-J", "-V", "RUFUS_LIVE_TEST", *bios_args,
                         "--modification-date=2026010100000000", "-partition_offset", "16",
                         "-append_partition", "2", "0xef", str(self.efi), "-appended_part_as_gpt",
                         "-e", "--interval:appended_partition_2:all::", "-no-emul-boot",
                         "-o", str(self.iso), str(self.tree)], check=True, capture_output=True)
+
+    def test_debian_readonly_rock_ridge_configs_can_be_prepared_without_root(self):
+        self.fixture("live", readonly=True)
+        before = core.checksum(self.iso)
+        result = live.create_live_image(self.iso, self.output, 64 * live.MIB)
+        self.assertEqual(result["kind"], "debian")
+        self.assertIn(b"boot=live persistence", self.extract("/boot/grub/grub.cfg"))
+        self.assertEqual(core.checksum(self.iso), before)
+        self.assertEqual((self.tree / "boot/grub/grub.cfg").stat().st_mode & 0o777, 0o444)
 
     def extract(self, path):
         dest = self.root / "extracted"

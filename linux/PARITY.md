@@ -33,9 +33,9 @@ are present. File-backed tests alone do not establish bootability.
 | Windows To Go | Native NTFS WIM/ESD deployment, edition/CPU selection, isolated Microsoft WinPE tools; desktop/CLI; real Windows 11 BIOS/UEFI USB startup and live portable-policy checks pass | Additional releases/layouts, ARM64/32-bit Windows, full OOBE and physical USB validation |
 | FreeDOS | Implemented, desktop/CLI; SeaBIOS boots FAT16 and FAT32 through COMMAND.COM | Physical hardware and regional keyboard configuration |
 | MS-DOS | Pending | Supported source extraction and boot tests |
-| GRUB ISO extraction mode | Implemented FAT32 for conventional Casper/Debian menus; x86 BIOS/UEFI, ARM64 UEFI, ARM32 UEFI, optional persistence | Additional distributions, full ARM live-root persistence, Secure Boot and physical devices |
-| Syslinux ISO extraction mode | Implemented for conventional Casper/Debian live entries; native Syslinux BIOS and GRUB UEFI; real kernel boots and DragonOS persistence reboots pass | Additional Syslinux-source distributions, dynamic/utility menus and Syslinux variants |
-| Linux persistence | Implemented for Casper/DragonOS and Debian hybrid ISOs, desktop and CLI; real DragonOS write/reboot/read passes under BIOS and UEFI | Real Debian and additional distro reboots; Secure Boot and physical USB validation |
+| GRUB ISO extraction mode | Implemented FAT32 for conventional Casper/Debian menus; real Debian/DragonOS persistence reboots under x86 BIOS/UEFI; ARM64/ARM32 UEFI kernel boots | Additional distributions, full ARM live-root persistence, Secure Boot and physical devices |
+| Syslinux ISO extraction mode | Native Syslinux BIOS and GRUB UEFI; Debian static submenu scopes; real Debian/DragonOS persistence reboots pass | Additional Syslinux-source distributions, dynamic/utility menus and Syslinux variants |
+| Linux persistence | Casper/DragonOS and Debian, desktop/CLI; real Debian hybrid/GRUB/Syslinux write/reboot/read under BIOS and UEFI | Additional distro and full ARM live-root reboots; full userspace, Secure Boot and physical USB validation |
 | Windows ISO and UEFI Shell download | Pending | Official-source catalog, cancellation, integrity and caching |
 | UEFI runtime media validation | Pending | Validation loader integration and firmware tests |
 | Secure Boot DBX/SBAT checks | Pending | PE hashing, signature/catalog parsing, revocation data and fixtures |
@@ -83,6 +83,11 @@ kernels from one generated FAT32 USB image, including multiple initrds.
 Actual DragonOS GRUB menus converted to native Syslinux BIOS media also passed
 Casper marker-file write/reboot/read tests under both BIOS and UEFI. These VM
 checks do not replace physical USB/firmware validation.
+Debian Live 13.7.0 now passes the same two-firmware persistence checks in hybrid,
+native GRUB and native Syslinux layouts. Read-only ISO preparation, embedded EFI
+partition preservation and safe FAT32 alias handling are covered. The Debian
+hook runs after the original init-bottom scripts; Casper retains its earlier
+root-mount checkpoint. See [PERSISTENCE.md](PERSISTENCE.md) for scope and limits.
 
 ## Additional requested platforms
 
