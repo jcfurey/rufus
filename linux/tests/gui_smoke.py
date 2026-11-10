@@ -108,6 +108,32 @@ def main():
                 window.image = str(image)
                 window.update_controls()
                 assert window.start.get_sensitive()
+                window.win_mode.set_selected(1)
+                assert window.wtg_box.get_visible() and not window.windows_media.get_visible()
+                assert not window.start.get_sensitive()
+                edition = {"index": 6, "name": "Windows fixture", "architecture": "amd64",
+                           "major": 10, "minor": 0, "expanded_size": 12 * 1024**3}
+                window.show_windows_editions(str(image), [edition])
+                window.wtg_index.set_selected(1)
+                assert not window.start.get_sensitive()  # The existing 1 GiB fixture is too small.
+                window.refreshed([Device("/dev/TEST_ONLY", 64 * 1024**3, "UI TEST", "", "999:999", (), ())], None)
+                window.drive.set_selected(1)
+                assert window.start.get_sensitive()
+                edition["architecture"] = "arm64"
+                window.wtg_firmware.set_selected(1)
+                assert not window.start.get_sensitive()
+                assert "ARM64" in window.device_note.get_text()
+                window.wtg_firmware.set_selected(0)
+                assert window.start.get_sensitive()
+                window.win_arch.set_selected(1)  # x64 assertion must not accept the ARM64 edition.
+                assert not window.start.get_sensitive()
+                window.win_arch.set_selected(0)
+                assert window.start.get_sensitive()
+                edition["architecture"] = "amd64"
+                window.win_bypass.set_active(True)
+                assert not window.windows_options().bypass_hardware
+                window.win_bypass.set_active(False)
+                window.win_mode.set_selected(0)
                 window.start_clicked(None)
                 assert window.confirmation is not None
 

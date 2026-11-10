@@ -27,8 +27,8 @@ are present. File-backed tests alone do not establish bootability.
 | Windows UDF installation ISOs | Implemented with 7-Zip; actual Windows 11 UDF bridge tested | Additional ISO versions and malformed-UDF coverage |
 | Windows hardware-check bypass | WinPE answer-file injection implemented and tested with wimlib | Actual Windows Setup validation |
 | Local account, privacy, locale, encryption options | Implemented in desktop and CLI; safe answer-file staging tested | Actual OOBE validation; automatic Linux-to-Windows regional mapping |
-| Remaining Windows setup/QoL options | Pending | Edition selection, 2023 bootloaders, policy changes, silent installation |
-| Windows To Go | Pending | WIM application, offline registry, BCD creation, BIOS/UEFI boot validation |
+| Remaining Windows setup/QoL options | Pending | Installer edition selection, 2023 bootloaders, policy changes, silent installation |
+| Windows To Go | Native NTFS WIM/ESD deployment, edition/CPU selection, isolated Microsoft WinPE tools; desktop/CLI; real Windows 11 BIOS/UEFI USB startup and live portable-policy checks pass | Additional releases/layouts, ARM64/32-bit Windows, full OOBE and physical USB validation |
 | FreeDOS | Implemented, desktop/CLI; SeaBIOS boots FAT16 and FAT32 through COMMAND.COM | Physical hardware and regional keyboard configuration |
 | MS-DOS | Pending | Supported source extraction and boot tests |
 | GRUB ISO extraction mode | Implemented FAT32 for conventional Casper/Debian menus; x86 BIOS/UEFI, ARM64 UEFI, ARM32 UEFI, optional persistence | Additional distributions, full ARM live-root persistence, Secure Boot and physical devices |
@@ -63,6 +63,9 @@ Windows and FreeDOS now prepare disk images without elevated access and enter
 the common disk writer only after successful construction. Actual Windows 11
 Setup boot was validated with a private VM overlay, without altering the source
 ISO or a physical drive. Full installation/OOBE validation remains outstanding.
+Windows To Go has a separate NTFS deployment and isolated WinPE boot/policy
+configuration path. See [WINDOWS_TO_GO.md](WINDOWS_TO_GO.md) for dependencies,
+CPU/layout selection, transaction boundaries, and validation limits.
 
 Linux persistence uses hybrid ISO remastering with the source boot equipment
 retained. Casper/DragonOS uses ext4 labeled `writable` (or `casper-rw` for older

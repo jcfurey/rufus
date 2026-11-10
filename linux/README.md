@@ -32,7 +32,7 @@ To create an Ubuntu package:
 
 ```sh
 make -C linux deb
-sudo apt install ./linux/dist/rufus-linux_0.7.0_all.deb
+sudo apt install ./linux/dist/rufus-linux_0.8.0_all.deb
 ```
 
 Alternatively, install the application and desktop launcher for your user:
@@ -89,14 +89,20 @@ Your desktop session must have `$HOME/.local/bin` on `PATH` for that launcher.
 - USB formatting with GPT or MBR and FAT32, exFAT, NTFS, ext2, ext3, or ext4.
 - Command-line access to the same storage operations and SHA-256 calculation.
 - A standalone executable archive, a desktop launcher, and Debian packaging.
+- Windows To Go edition selection, native NTFS deployment, and boot/policy
+  configuration in an isolated WinPE VM before physical writing. The desktop
+  and CLI provide this workflow; the CLI also prepares image files without
+  administrator access.
+  See [WINDOWS_TO_GO.md](WINDOWS_TO_GO.md) for dependencies and validation scope.
 
-This is an initial port, **not full parity with Windows Rufus**. Windows To Go,
-remaining advanced Windows setup options, Syslinux-specific ISO extraction,
+This is an initial port, **not full parity with Windows Rufus**. Remaining
+advanced Windows setup options, dynamic/utility Syslinux menus,
 ISO downloads, Secure Boot revocation checks,
 VHDX/FFU/VTSI support, translations, and destructive bad-block testing are not
 implemented. DD mode preserves whatever boot support is already in an image.
-UEFI Windows media retains the bootloader supplied by the selected ISO; the
-port does not validate that loader's signature, architecture, or bootability.
+Windows installation media retains the ISO's loader; signature and revocation
+validation remain pending. Windows To Go additionally checks that the EFI
+loader and WinPE match the selected edition's CPU architecture.
 The detailed implementation and validation checklist is in [PARITY.md](PARITY.md).
 
 ## Command-line examples
@@ -409,3 +415,25 @@ persistence implementation and boot testing remain on the parity checklist.
   extractor. Full ARM live-distribution persistence remains acceptance work.
 - GTK checks cover the new loader selection. The amd64 CI job includes the
   reproducible two-firmware kernel test; remote execution remains pending.
+
+### Version 0.8 validation
+
+- All 184 automated tests passed with the local development toolset. Windows
+  tests apply selected WIM and solid ESD editions to real unmounted NTFS,
+  validate FAT/GPT/MBR layouts and CPU metadata, and cover cancellation,
+  protected outputs/logs, VM isolation, and failure before physical writing.
+- GTK checks cover Windows To Go mode, explicit edition selection, CPU/firmware
+  compatibility, edition capacity, installer-only options, and existing workflows.
+  The standalone application and version 0.8.0 Debian package build successfully.
+- A real Windows 11 Pro x64 image (index 6, build 26300) was prepared through
+  the full CLI into a 64 GiB BIOS+UEFI image. Native wimlib applied the installed
+  OS; the ISO's WinPE ran Microsoft's registry and boot tools successfully.
+  Preparation used only regular files and an isolated software-emulated VM.
+- Private virtual USB copies booted Windows through BIOS and UEFI and reported
+  SAN policy 4 and PortableOperatingSystem 1 from their active registries.
+  Queries ran through the real OS's diagnostic console; full OOBE and the
+  staged answer-file commands were not validated. Source media and the prepared
+  output remain unchanged by guest writes. Genuine ARM64/32-bit x86 Windows,
+  full OOBE, Secure Boot, and physical USB validation remain pending.
+- Build metadata, preparation logs, and boot diagnostics are under ignored
+  `linux/build/real-media/windows-to-go-0.8*` and `windows-togo-0.8*`.

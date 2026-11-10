@@ -24,6 +24,8 @@ class Window(Gtk.ApplicationWindow):
         self.set_default_size(620, 640)
         self.set_resizable(True)
         self.devices = []
+        self.wtg_images = []
+        self.wtg_source = None
         self.image = None
         self.output = None
         self.hash_window = None
@@ -99,6 +101,20 @@ class Window(Gtk.ApplicationWindow):
         self.image_row.append(self.choose)
         self.form.append(self.image_row)
 
+        self.win_mode = Gtk.DropDown.new_from_strings(["Windows installation USB", "Windows To Go — portable Windows"])
+        self.form.append(self.win_mode)
+        self.wtg_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        editions = Gtk.Box(spacing=8)
+        self.wtg_index = Gtk.DropDown.new_from_strings(["Inspect the ISO, then choose a Windows edition"])
+        self.wtg_index.set_hexpand(True)
+        editions.append(self.wtg_index)
+        self.wtg_inspect = Gtk.Button(label="Inspect editions")
+        self.wtg_inspect.connect("clicked", self.inspect_windows_editions)
+        editions.append(self.wtg_inspect)
+        self.wtg_box.append(editions)
+        self.wtg_firmware = Gtk.DropDown.new_from_strings(["UEFI (GPT)", "BIOS (MBR)", "BIOS + UEFI (MBR)"])
+        self.wtg_box.append(self.wtg_firmware)
+        self.form.append(self.wtg_box)
         self.windows_media = Gtk.Box(spacing=8)
         self.win_filesystem = Gtk.DropDown.new_from_strings(["FAT32 (split large WIM files)", "NTFS (UEFI:NTFS)"])
         self.win_firmware = Gtk.DropDown.new_from_strings(["UEFI (GPT)", "BIOS (MBR)"])
@@ -255,6 +271,8 @@ class Window(Gtk.ApplicationWindow):
         outer.append(buttons)
         self.win_filesystem.connect("notify::selected", lambda *_: self.update_controls())
         self.win_firmware.connect("notify::selected", lambda *_: self.update_controls())
+        for widget in (self.win_mode, self.wtg_index, self.wtg_firmware, self.win_arch):
+            widget.connect("notify::selected", lambda *_: self.update_controls())
         self.live_layout.connect("notify::selected", lambda *_: self.update_controls())
         self.live_persist.connect("toggled", lambda *_: self.update_controls())
         for widget in (self.jetson_model, self.jetson_storage, self.jetson_method):
@@ -279,6 +297,10 @@ class Window(Gtk.ApplicationWindow):
         mode = self.mode.get_selected()
         recovery = mode == 6 and self.jetson_method.get_selected() >= 2
         direct = recovery and self.jetson_method.get_selected() == 2
+        wtg = mode == 1 and self.win_mode.get_selected() == 1
+        self.win_mode.set_visible(mode == 1)
+        self.wtg_box.set_visible(wtg)
+        self.win_bypass.set_visible(not wtg)
         self.jetson_direct.set_visible(direct)
         self.image_row.set_visible(mode not in (2, 4) and not recovery)
         self.hash_box.set_visible(mode in (0, 1, 5, 6) and not recovery)
@@ -287,7 +309,7 @@ class Window(Gtk.ApplicationWindow):
         self.device_row.set_visible(not recovery)
         self.format_box.set_visible(mode == 2)
         self.windows_box.set_visible(mode == 1)
-        self.windows_media.set_visible(mode == 1)
+        self.windows_media.set_visible(mode == 1 and not wtg)
         self.backup_format.set_visible(mode == 3)
         self.freedos_box.set_visible(mode == 4)
         self.live_box.set_visible(mode == 5)
@@ -320,6 +342,10 @@ class Window(Gtk.ApplicationWindow):
             fs = "FAT32" if self.win_filesystem.get_selected() == 0 else "NTFS"
             target = "UEFI/GPT" if self.win_firmware.get_selected() == 0 else "BIOS/MBR"
             self.mode_note.set_text(f"Prepares {target} Windows media using {fs}, then writes and verifies the image.")
+            if wtg:
+                self.mode_note.set_text("Deploys the selected Windows edition to NTFS, then configures boot and portable "
+                    "policies in a private VM before writing the drive. Requires QEMU, matching firmware, and ample "
+                    "temporary space. Internal disks stay offline in portable Windows. Choose an edition explicitly.")
         if mode == 5 and extracted:
             self.mode_note.set_text("Creates FAT32 Casper/Debian live media from GRUB or Syslinux menus. "
                                     "BIOS uses the selected GRUB/Syslinux loader; ARM and UEFI use GRUB. "
@@ -337,13 +363,31 @@ class Window(Gtk.ApplicationWindow):
         device = self.selected_device()
         blocked = device is not None and device.reason and not (mode == 3 and device.reason == "Drive is read-only.")
         recovery_ready = recovery and (not direct or bool(self.jetson_bsp.get_text() and self.jetson_board.get_text()))
-        self.start.set_sensitive(not self.busy and self.confirmation is None and jetson_valid and (recovery_ready or (not recovery and
+        wtg_problem = ""
+        if wtg:
+            if self.wtg_source != self.image or not 0 < self.wtg_index.get_selected() <= len(self.wtg_images):
+                wtg_problem = "Inspect this ISO and choose a Windows edition."
+            elif device:
+                from .windows_togo import validate_selection
+                try:
+                    if device.logical_sector != 512:
+                        raise RufusError("Windows To Go requires a drive with 512-byte logical sectors.")
+                    validate_selection(self.wtg_images[self.wtg_index.get_selected() - 1], device.size,
+                                       ("uefi", "bios", "both")[self.wtg_firmware.get_selected()],
+                                       ("", "amd64", "x86", "arm64", "arm")[self.win_arch.get_selected()])
+                except RufusError as exc:
+                    wtg_problem = str(exc)
+        wtg_ready = not wtg or (not wtg_problem and device is not None)
+        self.start.set_sensitive(not self.busy and self.confirmation is None and jetson_valid and wtg_ready and (recovery_ready or (not recovery and
                                  device is not None and not blocked and (mode in (2, 4) or selected_path is not None))))
+        self.wtg_inspect.set_sensitive(self.image is not None and not self.busy)
         self.hash_button.set_sensitive(self.image is not None and not self.busy)
         if direct:
             self.device_note.set_text("Select a connected recovery USB port under the BSP settings. Review shows the OS target and firmware scope.")
         elif recovery:
             self.device_note.set_text("Connect the Jetson's recovery USB port. Board detection and flashing occur in NVIDIA SDK Manager.")
+        elif wtg_problem:
+            self.device_note.set_text(wtg_problem)
         elif device:
             self.device_note.set_text(device.reason if blocked else
                 f"{device.path} · {human_size(device.size)} · " +
@@ -404,6 +448,8 @@ class Window(Gtk.ApplicationWindow):
             if not path:
                 raise RufusError("Select a local image file.")
             self.image = path
+            self.wtg_source, self.wtg_images = None, []
+            self.wtg_index.set_model(Gtk.StringList.new(["Inspect the ISO, then choose a Windows edition"]))
             self.image_label.set_text(Path(path).name)
             self.image_label.set_tooltip_text(path)
             self.hash.set_text("")
@@ -501,11 +547,29 @@ class Window(Gtk.ApplicationWindow):
         self.hash_window.present()
 
     def windows_options(self):
-        return WindowsOptions(bypass_hardware=self.win_bypass.get_active(), offline_account=self.win_offline.get_active(),
+        wtg = self.mode.get_selected() == 1 and self.win_mode.get_selected() == 1
+        return WindowsOptions(bypass_hardware=self.win_bypass.get_active() and not wtg, offline_account=self.win_offline.get_active(),
                               local_account=self.win_user.get_text(), privacy=self.win_privacy.get_active(),
                               disable_encryption=self.win_encrypt.get_active(), locale=self.win_locale.get_text(),
                               timezone=self.win_timezone.get_text(),
                               architecture=("", "amd64", "x86", "arm64", "arm")[self.win_arch.get_selected()])
+
+    def inspect_windows_editions(self, *_):
+        if not self.image:
+            return
+        from .windows_togo import inspect_iso
+        source = self.image
+        self.work(lambda: inspect_iso(source, self.cancel, self.report),
+                  lambda result: self.show_windows_editions(source, result))
+
+    def show_windows_editions(self, source, editions):
+        if source != self.image:
+            return
+        self.wtg_source, self.wtg_images = source, editions
+        self.wtg_index.set_model(Gtk.StringList.new(["Select a Windows edition…"] + [
+            f"{entry['index']}: {entry['name']} · {entry['architecture']}" for entry in editions]))
+        self.wtg_index.set_selected(0)
+        self.status.set_text("Choose the edition to install as portable Windows.")
 
     def jetson_selection(self):
         return (tuple(JETSON_MODELS)[self.jetson_model.get_selected()],
@@ -671,6 +735,15 @@ class Window(Gtk.ApplicationWindow):
         table, label = ("gpt", "dos")[self.table.get_selected()], self.volume.get_text()
         dos_fat, dos_label = (16, 32)[self.freedos_fat.get_selected()], self.freedos_label.get_text()
         win_fs, win_target = ("vfat", "ntfs")[self.win_filesystem.get_selected()], ("uefi", "bios")[self.win_firmware.get_selected()]
+        wtg = mode == 1 and self.win_mode.get_selected() == 1
+        wtg_index = None
+        if wtg:
+            selected = self.wtg_index.get_selected() - 1
+            if self.wtg_source != image or not 0 <= selected < len(self.wtg_images):
+                self.status.set_text("Inspect this ISO and select a Windows edition first.")
+                return
+            wtg_index = self.wtg_images[selected]["index"]
+        wtg_firmware = ("uefi", "bios", "both")[self.wtg_firmware.get_selected()]
         persistence = self.persistence.get_value_as_int() * 1024**2 if self.live_persist.get_active() else 0
         casper_label = ("writable", "casper-rw")[self.casper_label.get_selected()]
         live_mode = ("hybrid", "extract")[self.live_layout.get_selected()]
@@ -705,7 +778,17 @@ class Window(Gtk.ApplicationWindow):
             if mode == 0:
                 self.work(lambda: write_to_device(image, device, expected, verify, self.cancel, self.report))
             elif mode == 1:
-                self.work(lambda: windows_installer(image, device, expected, verify, self.cancel, self.report, options, win_fs, win_target))
+                if wtg:
+                    from .devices import windows_to_go_device
+                    def portable():
+                        state = Path(GLib.get_user_state_dir()) / "rufus-linux"
+                        state.mkdir(mode=0o700, parents=True, exist_ok=True)
+                        log = state / f"windows-to-go-{time.time_ns()}.log"
+                        return windows_to_go_device(image, device, index=wtg_index, firmware=wtg_firmware, options=options,
+                            expected=expected, verify=verify, log=log, cancel=self.cancel, progress=self.report)
+                    self.work(portable, lambda result: self.status.set_text("Portable Windows prepared · log: " + result["log"]))
+                else:
+                    self.work(lambda: windows_installer(image, device, expected, verify, self.cancel, self.report, options, win_fs, win_target))
             elif mode == 2:
                 self.work(lambda: format_device(device, filesystem, label, table, self.cancel, self.report))
             elif mode == 5:

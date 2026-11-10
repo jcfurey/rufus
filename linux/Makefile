@@ -1,17 +1,20 @@
 PYTHON ?= /usr/bin/python3
 PREFIX ?= /usr/local
 DESTDIR ?=
-VERSION = 0.7.0
+VERSION = 0.8.0
 LIVE_ISO ?=
 LIVE_OUTPUT ?= build/live-reboot-test
 LIVE_LAYOUT ?= hybrid
 LIVE_BOOTLOADER ?= auto
 SYSLINUX_KERNEL ?=
 SYSLINUX_OUTPUT ?= build/syslinux-boot-test
+WTG_IMAGE ?=
+WTG_OUTPUT ?= build/windows-togo-boot-test
+WTG_FIRMWARE ?= uefi
 SOURCES = $(wildcard rufus_linux/*.py)
 RESOURCES = $(wildcard ../res/freedos/* ../src/ms-sys/inc/*.h) ../res/uefi/uefi-ntfs.img
 
-.PHONY: all check smoke-test gui-test boot-test uefi-test live-test syslinux-test integration install uninstall clean deb
+.PHONY: all check smoke-test gui-test boot-test uefi-test live-test syslinux-test windows-togo-test integration install uninstall clean deb
 all: dist/rufus-linux
 
 dist/rufus-linux: $(SOURCES) $(RESOURCES) build_assets.py Makefile ../LICENSE.txt
@@ -44,6 +47,9 @@ live-test:
 
 syslinux-test:
 	$(PYTHON) tests/syslinux_smoke.py --kernel "$(SYSLINUX_KERNEL)" --output-dir "$(SYSLINUX_OUTPUT)"
+
+windows-togo-test:
+	$(PYTHON) tests/windows_togo_smoke.py --image "$(WTG_IMAGE)" --output-dir "$(WTG_OUTPUT)" --firmware "$(WTG_FIRMWARE)" --usb
 
 integration:
 	$(PYTHON) tests/udisks_integration.py

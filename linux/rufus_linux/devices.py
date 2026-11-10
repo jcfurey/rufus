@@ -315,6 +315,25 @@ def windows_installer(source, device, expected="", verify=True, cancel=None, pro
     return result["source_sha256"]
 
 
+def windows_to_go_device(source, device, *, index, firmware="uefi", options=None, expected="", verify=True,
+                         log=None, timeout=900, cancel=None, progress=None):
+    from .windows_togo import create_windows_to_go, partitions
+    guard(device, source)
+    log = Path(log) if log is not None else Path.cwd() / f"rufus-windows-to-go-{time.time_ns()}.log"
+    guard(device, log.parent)
+    if device.logical_sector != 512:
+        raise RufusError("Windows To Go currently requires a drive with 512-byte logical sectors.")
+    partitions(device.size, firmware)
+    with tempfile.TemporaryDirectory(prefix="rufus-windows-togo-drive-") as directory:
+        guard(device, directory)
+        image = Path(directory) / "windows-to-go.img"
+        result = create_windows_to_go(source, image, index=index, size=device.size, firmware=firmware,
+            options=options, expected=expected, log=log, timeout=timeout, cancel=cancel, progress=progress)
+        guard(device, source)
+        write_to_device(image, device, result["sha256"], verify, cancel, progress)
+    return {**result, "device": device.path}
+
+
 def live_device(source, device, persistence_size=1024 * 1024**2, casper_label="writable",
                 expected="", verify=True, cancel=None, progress=None, *, mode="hybrid", architecture="auto", firmware=None,
                 bootloader="auto"):

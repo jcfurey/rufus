@@ -16,9 +16,11 @@ from .devices import (backup_device, discover_devices, format_device, freedos_de
 from .windows import WindowsOptions, answer_file, prepare_windows
 
 
-def windows_arguments(command):
-    command.add_argument("--bypass-hardware-checks", dest="bypass_hardware", action="store_true",
-                         help="add Rufus's WinPE TPM/Secure Boot/RAM check bypass")
+def windows_arguments(command, *, installer=True):
+    command.set_defaults(bypass_hardware=False)
+    if installer:
+        command.add_argument("--bypass-hardware-checks", dest="bypass_hardware", action="store_true",
+                             help="add Rufus's WinPE TPM/Secure Boot/RAM check bypass")
     command.add_argument("--offline-account", action="store_true", help="request offline Windows account setup")
     command.add_argument("--local-account", default="", help="create a local administrator and require a password change")
     command.add_argument("--privacy", action="store_true", help="disable express data-collection choices during setup")
@@ -118,6 +120,22 @@ def parser():
     windows.add_argument("--sha256", default="")
     windows.add_argument("--no-verify", action="store_true")
     windows_arguments(windows)
+    editions = commands.add_parser("windows-images", help="list Windows editions/indexes from an installation ISO")
+    editions.add_argument("image")
+    togo = commands.add_parser("windows-to-go", help="deploy portable Windows and configure boot in a private WinPE VM")
+    togo.add_argument("image")
+    destination = togo.add_mutually_exclusive_group(required=True)
+    destination.add_argument("--device", help="whole removable drive to erase after successful preparation")
+    destination.add_argument("--output", help="NEW portable Windows image; no root or physical drive required")
+    togo.add_argument("--confirm", help="repeat the exact removable drive path to authorize erasing it")
+    togo.add_argument("--index", type=int, required=True, help="edition index from windows-images")
+    togo.add_argument("--size-gib", type=int, help="output image capacity; default 64 GiB; physical drives use their whole capacity")
+    togo.add_argument("--firmware", choices=("uefi", "bios", "both"), default="uefi")
+    togo.add_argument("--vm-timeout", type=int, default=900, help="private WinPE VM timeout in seconds (30-7200)")
+    togo.add_argument("--log", help="NEW log filename; defaults beside the output image or in the working directory")
+    togo.add_argument("--sha256", default="")
+    togo.add_argument("--no-verify", action="store_true", help="skip USB read-back verification")
+    windows_arguments(togo, installer=False)
     prepare = commands.add_parser("prepare-windows", help="extract/customize Windows ISO into a NEW directory; no drive needed")
     prepare.add_argument("image")
     prepare.add_argument("--output", required=True)
@@ -170,7 +188,7 @@ def main(argv=None):
 
     def progress(stage, done, total):
         now = time.monotonic()
-        if stage != last[1] or now - last[0] >= 0.25 or done == total:
+        if stage != last[1] or now - last[0] >= 0.25 or (total and done == total):
             suffix = f" {100 * done / total:.1f}%" if total else ""
             print(f"{stage}{suffix}", file=sys.stderr)
             last[:] = now, stage
@@ -275,6 +293,25 @@ def main(argv=None):
                                      output=args.output, device=device, expected=args.sha256,
                                      verify=not args.no_verify, cancel=cancel, progress=progress)
                 print(json.dumps(result, indent=2))
+        elif args.command == "windows-images":
+            from .windows_togo import inspect_iso
+            print(json.dumps(inspect_iso(args.image, cancel, progress), indent=2))
+        elif args.command == "windows-to-go":
+            from .windows_togo import GIB, create_windows_to_go
+            if args.output:
+                result = create_windows_to_go(args.image, args.output, index=args.index,
+                    size=(args.size_gib if args.size_gib is not None else 64) * GIB, firmware=args.firmware,
+                    options=windows_options(args), expected=args.sha256, log=args.log,
+                    timeout=args.vm_timeout, cancel=cancel, progress=progress)
+            else:
+                if args.size_gib is not None:
+                    raise RufusError("--size-gib applies to output files; a removable drive uses its whole capacity.")
+                from .devices import windows_to_go_device
+                log = args.log or str(Path.cwd() / f"rufus-windows-to-go-{time.time_ns()}.log")
+                result = windows_to_go_device(args.image, select_device(args.device, args.confirm), index=args.index,
+                    firmware=args.firmware, options=windows_options(args), expected=args.sha256,
+                    verify=not args.no_verify, log=log, timeout=args.vm_timeout, cancel=cancel, progress=progress)
+            print(json.dumps(result, indent=2))
         elif args.command == "windows":
             filesystem = "vfat" if args.filesystem == "fat32" else "ntfs"
             if args.output:

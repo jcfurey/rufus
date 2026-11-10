@@ -11,6 +11,7 @@ from .boot import chs
 from .core import RufusError, write_at
 
 GUID_TYPES = {"esp": "c12a7328-f81f-11d2-ba4b-00a0c93ec93b",
+              "msr": "e3c9e316-0b5c-4db8-817d-f92df00215ae",
               "basic": "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7",
               "linux": "0fc63daf-8483-4772-8e79-3d69d8477de4"}
 
