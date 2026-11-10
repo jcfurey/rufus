@@ -177,7 +177,7 @@ class ParityTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_unsupported_container_is_never_written_as_raw(self):
-        self.source.write_bytes(b"vhdxfile" + b"\0" * 4096)
+        self.source.write_bytes(b"\0" * 4 + b"SignedImage " + b"\0" * 4096)
         with self.assertRaisesRegex(core.RufusError, "not supported"):
             core.write_to_file(self.source, self.output)
         self.assertFalse(self.output.exists())

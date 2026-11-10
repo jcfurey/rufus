@@ -32,7 +32,7 @@ To create an Ubuntu package:
 
 ```sh
 make -C linux deb
-sudo apt install ./linux/dist/rufus-linux_0.8.0_all.deb
+sudo apt install ./linux/dist/rufus-linux_0.9.0_all.deb
 ```
 
 Alternatively, install the application and desktop launcher for your user:
@@ -51,9 +51,11 @@ Your desktop session must have `$HOME/.local/bin` on `PATH` for that launcher.
   (.Z), Zstandard, and single-file ZIP archives. Archive members are streamed,
   never extracted by their filenames. Corrupt/ambiguous archives fail preflight.
   ISO files must contain a disk partition table for DD mode to be bootable.
-- Native fixed/dynamic VHD restoration, including compressed VHD files. VHD
-  metadata and sector bitmaps are validated; differencing disks are refused.
-- Drive backup to new raw IMG or fixed VHD files, using a read-only source
+- Native fixed/dynamic VHD and standalone VHDX restoration, including compressed
+  containers. Metadata, checksums, allocation bounds, and overlaps are validated.
+  VHDX preserves 512-byte or 4-KiB logical sectors; parent-dependent disks and
+  VHDX logs requiring replay are refused. See [IMAGES.md](IMAGES.md).
+- Drive backup to new raw IMG, fixed VHD, or fixed VHDX files, using a read-only source
   descriptor and read-back verification. Existing output files are protected.
 - MD5, SHA-1, SHA-256, and SHA-512 in a single read, in the desktop and CLI.
 - Windows installation media with UEFI/GPT or BIOS/MBR, using FAT32 or NTFS.
@@ -98,7 +100,7 @@ Your desktop session must have `$HOME/.local/bin` on `PATH` for that launcher.
 This is an initial port, **not full parity with Windows Rufus**. Remaining
 advanced Windows setup options, dynamic/utility Syslinux menus,
 ISO downloads, Secure Boot revocation checks,
-VHDX/FFU/VTSI support, translations, and destructive bad-block testing are not
+FFU/VTSI, differencing containers/log recovery, translations, and destructive bad-block testing are not
 implemented. DD mode preserves whatever boot support is already in an image.
 Windows installation media retains the ISO's loader; signature and revocation
 validation remain pending. Windows To Go additionally checks that the EFI
@@ -118,6 +120,11 @@ The detailed implementation and validation checklist is in [PARITY.md](PARITY.md
 # Test VHD creation/restoration using only regular files.
 ./rufus-linux backup --source /path/to/disk.img --output /tmp/test.vhd --format vhd
 ./rufus-linux write /tmp/test.vhd --output /tmp/restored.img
+
+# Native VHDX backup, including the geometry of a raw 4Kn source image.
+./rufus-linux backup --source /path/to/disk-4kn.img --output /tmp/test.vhdx \
+    --format vhdx --sector-size 4096
+./rufus-linux write /tmp/test.vhdx --output /tmp/restored-4kn.img
 
 # Prepare and inspect customized Windows files without erasing a drive.
 ./rufus-linux prepare-windows /path/to/windows.iso --output /tmp/windows-prepared \
@@ -437,3 +444,26 @@ persistence implementation and boot testing remain on the parity checklist.
   full OOBE, Secure Boot, and physical USB validation remain pending.
 - Build metadata, preparation logs, and boot diagnostics are under ignored
   `linux/build/real-media/windows-to-go-0.8*` and `windows-togo-0.8*`.
+
+### Version 0.9 validation
+
+- All 205 automated tests passed. Native VHDX restoration and fixed backups
+  preserve 512-byte and 4-KiB logical sectors. Tests cover CRC-32C, redundant metadata, allocation overlap
+  and bounds, parent/log rejection, cancellation, source changes, protected
+  outputs, and drive checks before authorization. Sparse fixtures exercise
+  the 4-GiB/32-GiB chunk boundaries and a 4-TiB virtual disk with a larger table.
+- QEMU independently reads native 512-byte backups; its fixed/dynamic files
+  restore byte-for-byte through the native reader. Eight restored-image boot
+  checks pass: native-fixed and QEMU-dynamic containers through BIOS, UEFI,
+  ARM64 UEFI, and ARM32 UEFI. ARM guests boot real Linux kernels.
+- Microsoft's WinPE VHDX driver attaches native 4Kn GPT disks, reads the expected
+  file from FAT16 and NTFS, and reports 4096-byte sectors. FAT16 also passes
+  read-only attachment; freshly created NTFS needs writable initialization in
+  the disposable copy. Original Windows inputs and physical storage are untouched.
+- GTK checks cover the VHDX backup choice and filename. The 0.9.0 standalone
+  application and Debian package build, desktop startup, and packaged 4Kn
+  backup/restore checks pass. The native ARM64 CI workflow now restores VHDX
+  before booting its ARM image; remote execution remains pending.
+- Logs, geometry reports, boot markers, and results are under ignored
+  `linux/build/real-media/vhdx-*`. Physical backup/restore, additional producer
+  releases, parent chains, and log replay remain acceptance work.

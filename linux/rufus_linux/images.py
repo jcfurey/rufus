@@ -1,4 +1,4 @@
-"""Bounded-memory archive decoding and native fixed/dynamic VHD support."""
+"""Bounded-memory archive decoding and native VHD/VHDX disk views."""
 
 from contextlib import contextmanager
 import bz2
@@ -15,6 +15,13 @@ import uuid
 import zipfile
 
 from .core import CHUNK, RufusError, check_cancel, emit, run_tool
+
+WRAPPERS = {".gz", ".bz2", ".xz", ".lzma", ".zst", ".zstd", ".z"}
+
+
+def inner_suffix(filename):
+    path = Path(filename)
+    return Path(path.stem).suffix.lower() if path.suffix.lower() in WRAPPERS else path.suffix.lower()
 
 
 def copy_stream(source, target, cancel=None, progress=None, stage="Decompressing image", total=0):
@@ -167,7 +174,7 @@ def unpack_vhd(source, length, target, cancel=None, progress=None):
 
 
 @contextmanager
-def payload_stream(source, length, filename, cancel=None, progress=None):
+def payload_stream(source, length, filename, cancel=None, progress=None, *, metadata=None, max_size=None):
     source.seek(0)
     magic = source.read(8)
     source.seek(0)
@@ -196,6 +203,7 @@ def payload_stream(source, length, filename, cancel=None, progress=None):
             elif decoder:
                 with decoder(source, "rb") as stream:
                     length = copy_stream(stream, unpacked, cancel, progress)
+                suffix = inner_suffix(filename)
                 transformed = True
             elif magic.startswith(b"\x28\xb5\x2f\xfd") or suffix in (".zst", ".zstd"):
                 try:
@@ -209,6 +217,7 @@ def payload_stream(source, length, filename, cancel=None, progress=None):
                 else:
                     with zstd.open(source, "rb") as stream:
                         length = copy_stream(stream, unpacked, cancel, progress)
+                suffix = inner_suffix(filename)
                 transformed = True
             elif magic.startswith(b"\x1f\x9d") or suffix == ".z":
                 if not shutil.which("gzip"):
@@ -216,6 +225,7 @@ def payload_stream(source, length, filename, cancel=None, progress=None):
                 os.lseek(source.fileno(), 0, os.SEEK_SET)
                 run_tool(["gzip", "--decompress", "--stdout"], cancel, stdin=source, stdout=unpacked)
                 length = unpacked.tell()
+                suffix = inner_suffix(filename)
                 transformed = True
             elif magic.startswith((b"7z\xbc\xaf\x27\x1c", b"Rar!")) or suffix in (".7z", ".rar", ".tar"):
                 raise RufusError("This archive format is not supported. Extract its disk image before writing.")
@@ -225,13 +235,28 @@ def payload_stream(source, length, filename, cancel=None, progress=None):
             raise RufusError(f"Cannot decompress this image: {exc}") from exc
         stream = unpacked if transformed else source
         stream.seek(0)
-        header = stream.read(16)
+        header = stream.read(512)
         stream.seek(max(0, length - 512))
         footer = stream.read(512)
-        if suffix == ".vhd" or header.startswith(b"conectix") or footer[:8] == b"conectix":
+        if (suffix in WRAPPERS | {".zip", ".7z", ".rar", ".tar"} or
+                header.startswith((b"\x1f\x8b", b"BZh", b"\xfd7zXZ\0", b"\x28\xb5\x2f\xfd", b"\x1f\x9d",
+                                   b"PK\x03\x04", b"7z\xbc\xaf\x27\x1c", b"Rar!")) or
+                header[257:263] in (b"ustar\0", b"ustar ")):
+            raise RufusError("Nested compression/archive formats are not supported. Extract one disk image before writing.")
+        if header.startswith(b"vhdxfile") or suffix in (".vhdx", ".avhdx"):
+            from .vhdx import VHDXStream
+            stream = VHDXStream(stream, length, cancel, progress, max_size)
+            length, transformed = stream.size, True
+            if metadata is not None:
+                metadata["logical_sector"] = stream.logical_sector
+        elif suffix in (".vhd", ".avhd") or header.startswith(b"conectix") or footer[:8] == b"conectix":
+            if max_size is not None and vhd_info(stream, length)[0] > max_size:
+                raise RufusError("The image is larger than the selected drive.")
             length = unpack_vhd(stream, length, disk, cancel, progress)
             stream, transformed = disk, True
-        elif header.startswith(b"vhdxfile") or suffix in (".vhdx", ".ffu", ".vtsi") or header[4:] == b"SignedImage ":
+            if metadata is not None:
+                metadata["logical_sector"] = 512
+        elif suffix in (".ffu", ".vtsi") or header[4:16] == b"SignedImage ":
             raise RufusError("This disk container is not supported yet. Convert it to a raw IMG before writing.")
         stream.seek(0)
         yield stream, length, transformed

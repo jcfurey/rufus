@@ -42,6 +42,12 @@ def main():
                 assert window.backup_format.get_visible()
                 assert not window.hash_box.get_visible()
                 assert window.start.get_label() == "Save image"
+                window.backup_format.set_selected(2)
+                with patch.object(Gtk, "FileDialog") as chooser:
+                    window.choose_image(None)
+                    assert chooser.call_args.kwargs["initial_name"].endswith(".vhdx")
+                    chooser.return_value.save.assert_called_once()
+                window.backup_format.set_selected(0)
                 window.mode.set_selected(4)
                 assert window.freedos_box.get_visible()
                 assert not window.image_row.get_visible()

@@ -141,7 +141,8 @@ class Window(Gtk.ApplicationWindow):
         self.windows_box.set_child(windows_options)
         self.form.append(self.windows_box)
 
-        self.backup_format = Gtk.DropDown.new_from_strings(["Raw disk image (.img)", "Fixed virtual hard disk (.vhd)"])
+        self.backup_format = Gtk.DropDown.new_from_strings([
+            "Raw disk image (.img)", "Fixed virtual hard disk (.vhd)", "Fixed VHDX disk (.vhdx, supports 4 KiB sectors)"])
         self.form.append(self.backup_format)
 
         self.freedos_box = Gtk.Box(spacing=8)
@@ -330,7 +331,7 @@ class Window(Gtk.ApplicationWindow):
         self.start.set_label("Review BSP plan" if direct else "Open SDK Manager" if recovery else "Save image" if mode == 3 else "Start")
         self.mode_note.set_text((
             "Restores complete disk and board images, including ARM and Raspberry Pi firmware layouts. "
-            "Supports compressed images, ZIP, and fixed/dynamic VHD.",
+            "Supports compressed images, ZIP, and standalone fixed/dynamic VHD and VHDX.",
             "Creates GPT + FAT32 media for UEFI PCs. Large install.wim files are split automatically.",
             "Creates one data partition using the selected filesystem.",
             "Opens the USB drive read-only and saves all sectors to a new image file. Existing files are protected.",
@@ -434,7 +435,7 @@ class Window(Gtk.ApplicationWindow):
 
     def choose_image(self, _button):
         if self.mode.get_selected() == 3:
-            suffix = ".vhd" if self.backup_format.get_selected() else ".img"
+            suffix = (".img", ".vhd", ".vhdx")[self.backup_format.get_selected()]
             dialog = Gtk.FileDialog(title="Save USB drive to a new image file", initial_name="usb-backup" + suffix)
             dialog.save(self, None, self.output_selected)
             return
@@ -710,7 +711,7 @@ class Window(Gtk.ApplicationWindow):
             return
         mode = self.mode.get_selected()
         if mode == 3:
-            output, image_format, verify = self.output, ("raw", "vhd")[self.backup_format.get_selected()], self.verify.get_active()
+            output, image_format, verify = self.output, ("raw", "vhd", "vhdx")[self.backup_format.get_selected()], self.verify.get_active()
             self.work(lambda: backup_device(device, output, image_format, verify, self.cancel, self.report))
             return
         try:

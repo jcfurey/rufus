@@ -16,11 +16,12 @@ are present. File-backed tests alone do not establish bootability.
 | gzip, xz, bzip2 images | Implemented | Large-image and interrupted I/O cases |
 | ZIP, LZMA, compress (.Z), Zstandard images | Implemented, integrity and round-trip tests | Large-image boundaries |
 | Fixed/dynamic VHD restoration | Implemented natively; QEMU interoperability tested | Large-image and additional producer coverage |
-| VHDX, FFU, VTSI and differencing VHD restoration | Pending | Container validation/conversion and format-specific tests |
+| Standalone fixed/dynamic VHDX restoration | Native read-only disk view, 512-byte/4-KiB geometry, complete preflight; BIOS/UEFI and ARM32/ARM64 restored-image boots pass | Additional producers and large-file boundaries; physical 4Kn devices |
+| FFU, VTSI, differencing VHD/VHDX and VHDX log replay | Pending | Parent-chain validation and recovery/conversion tests |
 | SHA-256 | Implemented | Hardware validation of write/read-back |
 | MD5, SHA-1, SHA-512 | Implemented in one pass, desktop and CLI | Known-vector and cancellation tests pass |
-| Drive backup to DD/fixed VHD | Implemented, read-only source and protected output | Physical drive capture; file round trips and QEMU interop pass |
-| Drive backup to VHDX/FFU | Pending | Format-specific creation and interoperability |
+| Drive backup to DD/fixed VHD/fixed VHDX | Implemented, read-only source, VHDX sector geometry and protected output; native/file/QEMU round trips pass | Physical drive capture; additional producers and large-file boundaries |
+| Drive backup to FFU | Pending | Format-specific creation and interoperability |
 | Windows UEFI/FAT32 install media | Implemented; OVMF firmware fixture boots | Real Windows FAT32 boot and hardware validation |
 | Windows BIOS media | Implemented with upstream boot code, FAT32/NTFS, desktop and CLI | Actual Windows BIOS boot and hardware validation |
 | UEFI:NTFS | Implemented with bundled driver; firmware fixture and actual Windows 11 Setup boot pass | Secure Boot and physical hardware validation |

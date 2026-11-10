@@ -41,6 +41,9 @@ jobs:
       - name: Boot generated BIOS and UEFI media without root
         if: matrix.platform == 'amd64'
         run: make -C linux boot-test uefi-test
+      - name: Restore VHDX containers and boot through BIOS and UEFI
+        if: matrix.platform == 'amd64'
+        run: make -C linux vhdx-test
       - name: Boot a real Linux kernel through Syslinux BIOS and GRUB UEFI USB media
         if: matrix.platform == 'amd64'
         run: |
@@ -57,6 +60,9 @@ jobs:
             --firmware-code /usr/share/AAVMF/AAVMF_CODE.fd \
             --firmware-vars /usr/share/AAVMF/AAVMF_VARS.fd \
             --output-dir linux/build/arm64-boot-test
+          python3 linux/tests/vhdx_smoke.py --skip-x86 \
+            --arm64-image linux/build/arm64-boot-test/arm-live.img \
+            --output-dir linux/build/arm64-vhdx-boot-test
       - name: Check desktop startup
         run: |
           xvfb-run -a ./linux/dist/rufus-linux gui --smoke-test

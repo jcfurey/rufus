@@ -1,0 +1,127 @@
+# Disk images and VHDX
+
+The desktop's disk-image writer and the `write` command restore standalone fixed
+and dynamic VHDX disks. Drive backup supports raw IMG, fixed VHD, and fixed
+VHDX. These operations use native Python and its standard SQLite library;
+QEMU is an independent test tool, not a runtime dependency for VHDX operations.
+
+VHDX supports 512-byte and 4096-byte logical sectors and virtual sizes up to
+64 TiB. The container preserves the source disk's partition table, filesystems,
+bootloaders, and CPU-specific data. ARM32/ARM64 board images use the same
+decoder and backup writer as PC images. Boot firmware and logical-sector
+geometry must match the original disk's layout.
+
+## Restore
+
+Choose a VHDX file in **Disk or ISO image**, select a removable drive, and use
+the ordinary typed erase confirmation. The CLI shares the same preflight and
+verified writer:
+
+```sh
+# Create a NEW raw image file; no physical drive or administrator access.
+./rufus-linux write /path/to/source.vhdx --output /path/to/new-restored.img
+
+# DESTRUCTIVE: restores the virtual disk's bytes to this exact removable drive.
+./rufus-linux write /path/to/source.vhdx --device /dev/sdX --confirm /dev/sdX
+```
+
+Compression wrappers, including a ZIP containing one regular VHDX file, work
+through the existing image pipeline. `--sha256` checks the downloaded file,
+including its container/compression metadata. USB read-back verification checks
+the restored logical disk bytes. A raw output file carries those bytes; it has
+no container header in which to retain sector-size metadata.
+The inner container extension is retained through decompression, so a damaged
+compressed VHDX cannot silently fall back to raw writing. Nested archives and
+compression wrappers require extraction before use.
+
+Preflight validates both headers and region tables, CRC-32C checksums, required
+metadata, sector geometry, allocation states, file bounds, and overlapping
+allocations. It finishes before drive authorization or unmounting. Oversized
+virtual disks and known logical-sector mismatches are rejected before opening
+the drive for writing. A 4096-byte VHDX requires a 4096-byte logical-sector
+destination; a 512e drive still reports 512-byte logical sectors.
+
+The reader maps logical reads directly onto the validated container. It does
+not materialize a second raw disk. An on-disk SQLite allocation index keeps
+validation memory bounded for large disks. Temporary index files are private
+and removed on success, error, or cancellation. Compressed containers still
+need temporary space for decompression.
+
+## Backup
+
+Choose **Drive backup**, select **Fixed VHDX disk**, and select a new filename.
+The source opens read-only, and its reported logical-sector size is preserved
+automatically. Mounted volumes must be unmounted through the existing UDisks
+workflow. The backup destination must be on another drive.
+
+```sh
+./rufus-linux backup --device /dev/sdX \
+    --output /path/to/new-backup.vhdx --format vhdx
+
+# File-backed testing: explicitly describe an existing 4Kn raw disk layout.
+./rufus-linux backup --source /path/to/disk-4kn.img \
+    --output /path/to/new-backup.vhdx --format vhdx --sector-size 4096
+```
+
+File inputs default to 512-byte sectors. `--sector-size` describes existing
+raw-file geometry; it does not convert partition tables between sector sizes.
+It applies only to VHDX file-source backups. Physical backups always use the
+reported drive geometry. Legacy VHD supports 512-byte sectors only.
+
+Fixed VHDX backups reserve space for metadata and block padding in addition to
+the source disk bytes. Verification reopens the result through the VHDX reader
+and checks geometry and the complete logical disk SHA-256. Existing files and
+links are protected. Cancellation or a changed source removes the incomplete
+backup. `--no-verify` skips backup read-back; it does not disable source-change
+or format validation.
+
+## Scope and validation
+
+Parent-dependent VHD/VHDX checkpoints, including AVHD/AVHDX files, are rejected.
+VHDX logs requiring replay are also rejected; source containers are never
+repaired or modified automatically. Additional producer and recovery-log
+coverage remains acceptance work. These restrictions prevent writing incomplete
+parent-dependent data or uncommitted metadata to a drive.
+
+Default tests cover native 512-byte/4-KiB round trips, compressed containers,
+redundant-header recovery, malformed metadata and allocations, cancellation,
+source changes, protected outputs, drive geometry, and failure before drive
+access. QEMU tests independently read native 512-byte backups and generate
+fixed/dynamic inputs. [QEMU's VHDX driver](https://github.com/qemu/qemu/blob/master/block/vhdx.c)
+currently supports only 512-byte logical sectors, so it cannot independently
+check 4Kn containers.
+
+```sh
+# FreeDOS BIOS and UEFI-marker boots after fixed/dynamic VHDX round trips.
+make -C linux vhdx-test VHDX_OUTPUT=build/new-vhdx-boot-test
+
+# Optional ARM images previously generated by tests/arm_smoke.py.
+python3 linux/tests/vhdx_smoke.py --output-dir linux/build/new-arm-vhdx-test \
+    --skip-x86 --arm64-image /path/to/arm64/arm-live.img \
+    --arm32-image /path/to/arm32/arm-live.img
+
+# Microsoft-reader interoperability with a read-only extracted x64 Windows ISO.
+make -C linux vhdx-winpe-test WINDOWS_TREE=/path/to/extracted-windows-iso \
+    VHDX_WINPE_OUTPUT=build/new-microsoft-vhdx-test
+```
+
+The opt-in Microsoft test generates a 4Kn GPT/filesystem fixture, makes a native
+VHDX backup, and lets the ISO's WinPE attach a disposable copy. It verifies a
+file marker and Windows' reported logical sector size. The VM has no network,
+host shares, or physical devices. Source Windows files remain unchanged. The
+test copy is writable by default for filesystem initialization; `--readonly`
+can exercise read-only attachment. Proprietary Windows media is not required
+or downloaded by default tests.
+
+The local validation passed all eight fixed/dynamic restoration boot checks
+across BIOS, UEFI, ARM64 UEFI, and ARM32 UEFI. Microsoft's reader also mounted
+native 4Kn GPT/FAT16 and GPT/NTFS fixtures, read their marker files, and reported
+4096-byte sectors. Read-only FAT16 passed; the Linux-created NTFS fixture
+required writable first-mount initialization in its disposable copy.
+
+The format follows Microsoft's
+[MS-VHDX specification](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-vhdx/).
+QEMU's [VHDX driver](https://github.com/qemu/qemu/blob/master/block/vhdx.c)
+provides the separate 512-byte interoperability checks. Physical drives,
+genuine native ARM hosts, Hyper-V release combinations, and additional firmware
+remain separate validation work.

@@ -48,7 +48,7 @@ def parser():
     digest.add_argument("--algorithm", choices=HASH_ALGORITHMS + ("all",), default="sha256")
     digest.add_argument("--all", dest="algorithm", action="store_const", const="all")
     digest.add_argument("--json", action="store_true")
-    write = commands.add_parser("write", help="restore disk images, compressed images, ZIP, or VHD")
+    write = commands.add_parser("write", help="restore disk images, compressed images, ZIP, VHD, or VHDX")
     write.add_argument("image")
     destination = write.add_mutually_exclusive_group(required=True)
     destination.add_argument("--device", help="whole USB drive, e.g. /dev/sdb")
@@ -144,12 +144,14 @@ def parser():
     answer = commands.add_parser("windows-config", help="generate a Windows answer file without touching a drive")
     answer.add_argument("--output", required=True)
     windows_arguments(answer)
-    backup = commands.add_parser("backup", help="save and verify an entire USB drive as raw IMG or fixed VHD")
+    backup = commands.add_parser("backup", help="save and verify an entire USB drive as raw IMG, fixed VHD, or fixed VHDX")
     sources = backup.add_mutually_exclusive_group(required=True)
     sources.add_argument("--device", help="USB/removable source drive; opened read-only")
     sources.add_argument("--source", help="regular file source for backup/restore testing")
     backup.add_argument("--output", required=True, help="NEW destination filename; existing files are never overwritten")
-    backup.add_argument("--format", choices=("raw", "vhd"), default="raw")
+    backup.add_argument("--format", choices=("raw", "vhd", "vhdx"), default="raw")
+    backup.add_argument("--sector-size", type=int, choices=(512, 4096),
+                        help="VHDX --source file's logical sector size (default 512); drives use their reported size")
     backup.add_argument("--no-verify", action="store_true")
     dos = commands.add_parser("freedos", help="create BIOS-bootable FreeDOS media from bundled Rufus files")
     destination = dos.add_mutually_exclusive_group(required=True)
@@ -338,9 +340,12 @@ def main(argv=None):
                 write_all(fd, data)
             print(f"Created Windows answer file: {args.output}")
         elif args.command == "backup":
+            if args.sector_size is not None and (not args.source or args.format != "vhdx"):
+                raise RufusError("--sector-size applies to VHDX file sources; physical drives use their reported sector size.")
             if args.source:
                 from .backup import backup_file
-                result = backup_file(args.source, args.output, args.format, not args.no_verify, cancel, progress)
+                result = backup_file(args.source, args.output, args.format, not args.no_verify, cancel, progress,
+                                     logical_sector=args.sector_size or 512)
             else:
                 result = backup_device(select_device(args.device, destructive=False), args.output,
                                        args.format, not args.no_verify, cancel, progress)

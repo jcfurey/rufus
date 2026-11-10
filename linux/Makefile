@@ -1,7 +1,7 @@
 PYTHON ?= /usr/bin/python3
 PREFIX ?= /usr/local
 DESTDIR ?=
-VERSION = 0.8.0
+VERSION = 0.9.0
 LIVE_ISO ?=
 LIVE_OUTPUT ?= build/live-reboot-test
 LIVE_LAYOUT ?= hybrid
@@ -11,10 +11,13 @@ SYSLINUX_OUTPUT ?= build/syslinux-boot-test
 WTG_IMAGE ?=
 WTG_OUTPUT ?= build/windows-togo-boot-test
 WTG_FIRMWARE ?= uefi
+VHDX_OUTPUT ?= build/vhdx-boot-test
+WINDOWS_TREE ?=
+VHDX_WINPE_OUTPUT ?= build/vhdx-winpe-test
 SOURCES = $(wildcard rufus_linux/*.py)
 RESOURCES = $(wildcard ../res/freedos/* ../src/ms-sys/inc/*.h) ../res/uefi/uefi-ntfs.img
 
-.PHONY: all check smoke-test gui-test boot-test uefi-test live-test syslinux-test windows-togo-test integration install uninstall clean deb
+.PHONY: all check smoke-test gui-test boot-test uefi-test live-test syslinux-test windows-togo-test vhdx-test vhdx-winpe-test integration install uninstall clean deb
 all: dist/rufus-linux
 
 dist/rufus-linux: $(SOURCES) $(RESOURCES) build_assets.py Makefile ../LICENSE.txt
@@ -50,6 +53,12 @@ syslinux-test:
 
 windows-togo-test:
 	$(PYTHON) tests/windows_togo_smoke.py --image "$(WTG_IMAGE)" --output-dir "$(WTG_OUTPUT)" --firmware "$(WTG_FIRMWARE)" --usb
+
+vhdx-test:
+	$(PYTHON) tests/vhdx_smoke.py --output-dir "$(VHDX_OUTPUT)"
+
+vhdx-winpe-test:
+	$(PYTHON) tests/vhdx_winpe_smoke.py --windows-tree "$(WINDOWS_TREE)" --output-dir "$(VHDX_WINPE_OUTPUT)"
 
 integration:
 	$(PYTHON) tests/udisks_integration.py

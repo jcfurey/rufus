@@ -107,6 +107,7 @@ class PreparedImage:
     sha256: str
     is_iso: bool
     hybrid: bool
+    logical_sector: int | None = None
 
 
 def image_filesystems(header):
@@ -115,7 +116,7 @@ def image_filesystems(header):
 
 
 @contextmanager
-def prepare_image(path, expected="", cancel=None, progress=None):
+def prepare_image(path, expected="", cancel=None, progress=None, *, max_size=None):
     """Validate and size the *entire* decompressed image before opening a target.
 
     SHA-256 refers to the downloaded file, including its compression wrapper.
@@ -130,7 +131,11 @@ def prepare_image(path, expected="", cancel=None, progress=None):
         file_hash = digest_stream(source, original.st_size, cancel, progress)
         if expected and file_hash != expected:
             raise RufusError(f"SHA-256 mismatch: expected {expected}, got {file_hash}.")
-        with payload_stream(source, original.st_size, str(path), cancel, progress) as (stream, size, transformed):
+        metadata = {}
+        with payload_stream(source, original.st_size, str(path), cancel, progress,
+                            metadata=metadata, max_size=max_size) as (stream, size, transformed):
+            if max_size is not None and size > max_size:
+                raise RufusError("The image is larger than the selected drive.")
             if transformed:
                 stream.seek(0)
                 image_hash = digest_stream(stream, size, cancel, progress)
@@ -149,7 +154,7 @@ def prepare_image(path, expected="", cancel=None, progress=None):
             if (current.st_size, current.st_mtime_ns, current.st_ctime_ns) != (
                     original.st_size, original.st_mtime_ns, original.st_ctime_ns):
                 raise RufusError("The source image changed during preflight. Wait for the download to finish.")
-            yield PreparedImage(stream, size, image_hash, is_iso, hybrid)
+            yield PreparedImage(stream, size, image_hash, is_iso, hybrid, metadata.get("logical_sector"))
             current = os.fstat(source.fileno())
             if (current.st_size, current.st_mtime_ns, current.st_ctime_ns) != (
                     original.st_size, original.st_mtime_ns, original.st_ctime_ns):

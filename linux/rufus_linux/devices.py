@@ -259,8 +259,11 @@ def disk_capacity(fd):
 
 
 def write_to_device(source, device, expected="", verify=True, cancel=None, progress=None):
-    with prepare_image(source, expected, cancel, progress) as image:
+    with prepare_image(source, expected, cancel, progress, max_size=device.size) as image:
         device = guard(device, source)
+        if image.logical_sector is not None and image.logical_sector != device.logical_sector:
+            raise RufusError(f"Image uses {image.logical_sector}-byte logical sectors; the selected drive uses "
+                             f"{device.logical_sector}. Restore to a drive with matching logical sectors.")
         if image.size > device.size or (image.is_iso and not image.hybrid):
             # Run all image checks before unmounting or requesting authorization.
             if image.size > device.size:
@@ -370,13 +373,19 @@ def backup_device(device, output, image_format="raw", verify=True, cancel=None, 
     parent = output.parent.resolve(strict=True)
     if os.path.lexists(output):
         raise RufusError("Backup destination already exists. Select a new image filename.")
-    if image_format not in ("raw", "vhd"):
-        raise RufusError("Backup format must be raw or vhd.")
+    if image_format not in ("raw", "vhd", "vhdx"):
+        raise RufusError("Backup format must be raw, vhd, or vhdx.")
+    required = device.size + (512 if image_format == "vhd" else 0)
     if image_format == "vhd":
         from .images import validate_vhd_size
         validate_vhd_size(device.size)
+        if device.logical_sector != 512:
+            raise RufusError("VHD requires 512-byte logical sectors. Use VHDX for a 4 KiB-sector source.")
+    elif image_format == "vhdx":
+        from .vhdx import fixed_layout
+        required = fixed_layout(device.size, device.logical_sector)["file_size"]
     guard(device, parent, writable=False)
-    if shutil.disk_usage(parent).free < device.size + (512 if image_format == "vhd" else 0):
+    if shutil.disk_usage(parent).free < required:
         raise RufusError("The destination filesystem does not have enough space for this drive image.")
     check_cancel(cancel)
     service = UDisks()
@@ -392,7 +401,7 @@ def backup_device(device, output, image_format="raw", verify=True, cancel=None, 
         if capacity != device.size:
             raise RufusError("The selected drive size changed. Refresh and retry.")
         guard(device, parent, writable=False)
-        return save_image(fd, capacity, output, image_format, verify, cancel, progress)
+        return save_image(fd, capacity, output, image_format, verify, cancel, progress, logical_sector=device.logical_sector)
     finally:
         os.close(fd)
 
