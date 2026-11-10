@@ -13,12 +13,11 @@ import tempfile
 import time
 
 from .core import (RufusError, check_cancel, emit, expected_sha256, prepare_image, write_image)
+from .formatting import FS_TOOLS, plan_format, require_formatter
 
 BLOCK = "org.freedesktop.UDisks2.Block"
 FILESYSTEM = "org.freedesktop.UDisks2.Filesystem"
 TABLE = "org.freedesktop.UDisks2.PartitionTable"
-FS_TOOLS = {"vfat": "mkfs.vfat", "exfat": "mkfs.exfat", "ntfs": "mkfs.ntfs",
-            "ext2": "mkfs.ext2", "ext3": "mkfs.ext3", "ext4": "mkfs.ext4"}
 
 
 @dataclass(frozen=True)
@@ -213,6 +212,18 @@ class UDisks:
             raise
 
     def format(self, device, filesystem, label, table, efi=False, source=None):
+        plan = validate_format(device, filesystem, label, table)
+        if efi and filesystem != "vfat":
+            raise RufusError("EFI system partition formatting requires FAT32.")
+        # The daemon has a separate PATH and plugin set from this process.
+        # Check it before unmounting or erasing the existing partition table.
+        try:
+            available, missing = self.call("/org/freedesktop/UDisks2/Manager", "org.freedesktop.UDisks2.Manager",
+                                           "CanFormat", "(s)", (plan.backend,))[0]
+        except RufusError as exc:
+            raise RufusError(f"UDisks cannot format {filesystem}; check its filesystem backend: {exc}") from exc
+        if not available:
+            raise RufusError(f"UDisks cannot format {filesystem}. Install {missing or FS_TOOLS[filesystem]} system-wide before retrying.")
         device = guard(device, source)
         path = self.object_for(device.path)
         self.check_system_hint(path)
@@ -220,34 +231,20 @@ class UDisks:
         self.call(path, BLOCK, "Format", "(sa{sv})", (table, {}))
         if guard(device, source).mounts:
             raise RufusError("The drive was mounted during formatting. Unmount it and retry.")
-        kind = ("c12a7328-f81f-11d2-ba4b-00a0c93ec93b" if efi else
-                "0fc63daf-8483-4772-8e79-3d69d8477de4" if filesystem.startswith("ext") else
-                "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7") if table == "gpt" else (
-                    "0x83" if filesystem.startswith("ext") else "0x0c" if filesystem == "vfat" else "0x07")
-        options = {"label": self.GLib.Variant("s", label),
+        kind = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b" if efi and table == "gpt" else plan.kind
+        options = {"label": self.GLib.Variant("s", plan.label),
                    "take-ownership": self.GLib.Variant("b", True)}
-        if filesystem == "vfat":
-            options["mkfs-args"] = self.GLib.Variant("as", ["-F", "32"])
+        if plan.args:
+            options["mkfs-args"] = self.GLib.Variant("as", list(plan.args))
         return self.call(path, TABLE, "CreatePartitionAndFormat", "(ttssa{sv}sa{sv})",
-                         (1024 * 1024, 0, kind, "Rufus" if table == "gpt" else "", {},
-                          filesystem, options))[0]
+                         (plan.partition.start * plan.sector, plan.partition.sectors * plan.sector,
+                          kind, "Rufus" if table == "gpt" else "", {}, plan.backend, options))[0]
 
 
 def validate_format(device, filesystem, label, table):
-    if filesystem not in FS_TOOLS or table not in ("gpt", "dos"):
-        raise RufusError("Unsupported filesystem or partition table.")
-    if not shutil.which(FS_TOOLS[filesystem]):
-        raise RufusError(f"Install {FS_TOOLS[filesystem]} before formatting this filesystem.")
-    if device.size < 64 * 1024 * 1024:
-        raise RufusError("Formatting requires a drive of at least 64 MiB.")
-    if table == "dos" and device.size > 2**41:
-        raise RufusError("Use GPT for drives larger than 2 TiB.")
-    limit = {"vfat": 11, "ntfs": 32, "exfat": 15}.get(filesystem, 16)
-    if (not label or len(label.encode("utf-8")) > limit or
-            any(ord(c) < 32 or c in '\\/:*?"<>|' for c in label)):
-        raise RufusError(f"Volume label must contain 1–{limit} bytes without reserved characters.")
-    if filesystem == "vfat" and (not label.isascii() or any(c in '+.,;=[]' for c in label)):
-        raise RufusError("FAT32 labels require ASCII and cannot contain + . , ; = [ ].")
+    plan = plan_format(device.size, filesystem, label, table, device.logical_sector)
+    require_formatter(plan)
+    return plan
 
 
 def disk_capacity(fd):

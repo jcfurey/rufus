@@ -65,7 +65,7 @@ def install_freedos_bootcode(volume, fat_bits):
         os.fsync(disk.fileno())
 
 
-def copy_sparse(source_fd, target_fd, offset, size, cancel=None, progress=None):
+def copy_sparse(source_fd, target_fd, offset, size, cancel=None, progress=None, *, stage="Assembling bootable image"):
     position = 0
     while position < size:
         check_cancel(cancel)
@@ -87,7 +87,7 @@ def copy_sparse(source_fd, target_fd, offset, size, cancel=None, progress=None):
                 raise RufusError("Filesystem image ended during assembly.")
             write_all(target_fd, data)
             start += len(data)
-            emit(progress, "Assembling bootable image", start, size)
+            emit(progress, stage, start, size)
         position = end
 
 

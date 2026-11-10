@@ -1,11 +1,11 @@
 Package: rufus-linux
-Version: 0.9.0
+Version: 0.10.0
 Section: utils
 Priority: optional
 Architecture: all
 Maintainer: Rufus Linux Port Contributors <noreply@users.noreply.github.com>
 Depends: python3 (>= 3.10), python3-gi, gir1.2-gtk-4.0 (>= 4.10), udisks2, util-linux, dosfstools
-Recommends: xorriso, wimtools, exfatprogs, ntfs-3g, e2fsprogs, fdisk, mtools, 7zip, grub-common, pkexec
+Recommends: xorriso, wimtools, exfatprogs, ntfs-3g, e2fsprogs, fdisk, mtools, 7zip, grub-common, pkexec, udftools
 Suggests: grub-pc-bin, grub-efi-amd64-bin, grub-efi-arm64-bin, grub-efi-arm-bin, syslinux, qemu-system-x86, qemu-system-arm, qemu-efi-aarch64, seabios, ovmf
 Description: Native Linux preview of the Rufus bootable USB utility
  GTK 4 frontend and CLI for verified image writing, removable-drive formatting,

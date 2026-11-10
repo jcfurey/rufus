@@ -11,7 +11,8 @@ are present. File-backed tests alone do not establish bootability.
 | USB enumeration and system-disk protection | Implemented | Hardware hotplug and stacked-storage cases |
 | GPT/MBR formatting | Implemented | Complete disposable-disk filesystem matrix |
 | FAT32, exFAT, NTFS, ext2/ext3/ext4 | Implemented | Filesystem matrix and large-device boundaries |
-| FAT16, UDF, ReFS | Pending | Linux formatter/backend selection; ReFS write support |
+| FAT16, UDF | Implemented in desktop/CLI and file-image formatting; sector-aware preflight; x86/ARM32/ARM64 mount/write/reboot/read matrix passes | Physical devices, additional UDisks/releases and Windows/macOS interoperability |
+| ReFS | Pending | Linux formatter/backend selection; ReFS write support |
 | Raw/hybrid disk-image writing | Implemented | BIOS/UEFI boot fixtures and hardware testing |
 | gzip, xz, bzip2 images | Implemented | Large-image and interrupted I/O cases |
 | ZIP, LZMA, compress (.Z), Zstandard images | Implemented, integrity and round-trip tests | Large-image boundaries |

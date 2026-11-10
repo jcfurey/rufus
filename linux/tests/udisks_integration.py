@@ -113,8 +113,11 @@ def main():
                         unmount_fixture()
                         partition = service.format(device, filesystem, "RUFUS_TEST", table)
                         actual = service.objects()[partition][devices.BLOCK]["IdType"]
-                        if actual != filesystem:
-                            raise RuntimeError(f"Expected {filesystem}, found {actual}.")
+                        expected = "vfat" if filesystem == "fat16" else filesystem
+                        if actual != expected:
+                            raise RuntimeError(f"Expected {expected}, found {actual}.")
+                        if filesystem == "fat16" and service.objects()[partition][devices.BLOCK]["IdVersion"] != "FAT16":
+                            raise RuntimeError("Explicit FAT16 format did not produce FAT16.")
                         print(f"PASS: UDisks {table} + {filesystem}", flush=True)
                 unmount_fixture()
                 partition = service.format(device, "vfat", "RUFUS_TEST", "gpt", efi=True)

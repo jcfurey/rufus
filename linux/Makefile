@@ -1,7 +1,7 @@
 PYTHON ?= /usr/bin/python3
 PREFIX ?= /usr/local
 DESTDIR ?=
-VERSION = 0.9.0
+VERSION = 0.10.0
 LIVE_ISO ?=
 LIVE_OUTPUT ?= build/live-reboot-test
 LIVE_LAYOUT ?= hybrid
@@ -14,10 +14,13 @@ WTG_FIRMWARE ?= uefi
 VHDX_OUTPUT ?= build/vhdx-boot-test
 WINDOWS_TREE ?=
 VHDX_WINPE_OUTPUT ?= build/vhdx-winpe-test
+FS_KERNEL ?=
+FS_MODULES ?=
+FS_OUTPUT ?= build/filesystem-test
 SOURCES = $(wildcard rufus_linux/*.py)
 RESOURCES = $(wildcard ../res/freedos/* ../src/ms-sys/inc/*.h) ../res/uefi/uefi-ntfs.img
 
-.PHONY: all check smoke-test gui-test boot-test uefi-test live-test syslinux-test windows-togo-test vhdx-test vhdx-winpe-test integration install uninstall clean deb
+.PHONY: all check smoke-test gui-test boot-test uefi-test live-test syslinux-test windows-togo-test vhdx-test vhdx-winpe-test filesystem-test integration install uninstall clean deb
 all: dist/rufus-linux
 
 dist/rufus-linux: $(SOURCES) $(RESOURCES) build_assets.py Makefile ../LICENSE.txt
@@ -59,6 +62,9 @@ vhdx-test:
 
 vhdx-winpe-test:
 	$(PYTHON) tests/vhdx_winpe_smoke.py --windows-tree "$(WINDOWS_TREE)" --output-dir "$(VHDX_WINPE_OUTPUT)"
+
+filesystem-test:
+	$(PYTHON) tests/filesystem_smoke.py --kernel "$(FS_KERNEL)" --modules "$(FS_MODULES)" --output-dir "$(FS_OUTPUT)"
 
 integration:
 	$(PYTHON) tests/udisks_integration.py

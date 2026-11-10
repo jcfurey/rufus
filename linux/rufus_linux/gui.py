@@ -15,6 +15,7 @@ from .core import RufusError, checksums, expected_sha256, human_size
 from .devices import (backup_device, discover_devices, format_device, freedos_device, live_device,
                       windows_installer, write_to_device)
 from .windows import WindowsOptions
+from .formatting import FS_NAMES, FS_TOOLS, plan_format
 from .jetson import MODELS as JETSON_MODELS, installation_plan
 
 
@@ -225,7 +226,7 @@ class Window(Gtk.ApplicationWindow):
         self.format_box.append(self.label("Partition scheme and filesystem"))
         row = Gtk.Box(spacing=8)
         self.table = Gtk.DropDown.new_from_strings(["GPT", "MBR"])
-        self.filesystem = Gtk.DropDown.new_from_strings(["FAT32", "exFAT", "NTFS", "ext2", "ext3", "ext4"])
+        self.filesystem = Gtk.DropDown.new_from_strings(FS_NAMES)
         self.volume = Gtk.Entry(text="RUFUS", placeholder_text="Volume label")
         self.volume.set_hexpand(True)
         for widget in (self.table, self.filesystem, self.volume):
@@ -271,6 +272,7 @@ class Window(Gtk.ApplicationWindow):
         buttons.append(self.start)
         outer.append(buttons)
         self.win_filesystem.connect("notify::selected", lambda *_: self.update_controls())
+        self.filesystem.connect("notify::selected", lambda *_: self.update_controls())
         self.win_firmware.connect("notify::selected", lambda *_: self.update_controls())
         for widget in (self.win_mode, self.wtg_index, self.wtg_firmware, self.win_arch):
             widget.connect("notify::selected", lambda *_: self.update_controls())
@@ -347,6 +349,14 @@ class Window(Gtk.ApplicationWindow):
                 self.mode_note.set_text("Deploys the selected Windows edition to NTFS, then configures boot and portable "
                     "policies in a private VM before writing the drive. Requires QEMU, matching firmware, and ample "
                     "temporary space. Internal disks stay offline in portable Windows. Choose an edition explicitly.")
+        if mode == 2:
+            fs = tuple(FS_TOOLS)[self.filesystem.get_selected()]
+            if fs == "fat16":
+                self.mode_note.set_text("Creates a FAT16 data partition. Requires a drive smaller than 4 GiB; "
+                                        "volumes above 2 GiB use 64 KiB clusters and need compatible readers.")
+            elif fs == "udf":
+                self.mode_note.set_text("Creates a UDF 2.01 data partition. Requires udftools and UDisks UDF support. "
+                                        "Partitioned UDF media may require manual mounting on macOS.")
         if mode == 5 and extracted:
             self.mode_note.set_text("Creates FAT32 Casper/Debian live media from GRUB or Syslinux menus. "
                                     "BIOS uses the selected GRUB/Syslinux loader; ARM and UEFI use GRUB. "
@@ -732,8 +742,14 @@ class Window(Gtk.ApplicationWindow):
         # Snapshot the confirmed selection; refresh cannot redirect the operation.
         mode, image = self.mode.get_selected(), self.image
         expected, verify = self.hash.get_text(), self.verify.get_active()
-        filesystem = ("vfat", "exfat", "ntfs", "ext2", "ext3", "ext4")[self.filesystem.get_selected()]
+        filesystem = tuple(FS_TOOLS)[self.filesystem.get_selected()]
         table, label = ("gpt", "dos")[self.table.get_selected()], self.volume.get_text()
+        if mode == 2:
+            try:
+                plan_format(device.size, filesystem, label, table, device.logical_sector)
+            except RufusError as exc:
+                self.status.set_text(str(exc))
+                return
         dos_fat, dos_label = (16, 32)[self.freedos_fat.get_selected()], self.freedos_label.get_text()
         win_fs, win_target = ("vfat", "ntfs")[self.win_filesystem.get_selected()], ("uefi", "bios")[self.win_firmware.get_selected()]
         wtg = mode == 1 and self.win_mode.get_selected() == 1

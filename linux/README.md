@@ -12,7 +12,7 @@ any missing packages, including the tools for Windows ISO support:
 
 ```sh
 sudo apt install python3 python3-gi gir1.2-gtk-4.0 udisks2 util-linux \
-    dosfstools xorriso wimtools exfatprogs ntfs-3g e2fsprogs fdisk mtools 7zip
+    dosfstools udftools xorriso wimtools exfatprogs ntfs-3g e2fsprogs fdisk mtools 7zip
 make -C linux
 ./linux/dist/rufus-linux
 ```
@@ -32,7 +32,7 @@ To create an Ubuntu package:
 
 ```sh
 make -C linux deb
-sudo apt install ./linux/dist/rufus-linux_0.9.0_all.deb
+sudo apt install ./linux/dist/rufus-linux_0.10.0_all.deb
 ```
 
 Alternatively, install the application and desktop launcher for your user:
@@ -88,7 +88,10 @@ Your desktop session must have `$HOME/.local/bin` on `PATH` for that launcher.
   `sources/$OEM$/$$/Panther`. Existing answer files are preserved by refusing
   conflicting customization. Installation-time bypasses and OOBE behavior still
   need full installation tests.
-- USB formatting with GPT or MBR and FAT32, exFAT, NTFS, ext2, ext3, or ext4.
+- USB formatting with GPT or MBR and FAT16, FAT32, UDF 2.01, exFAT, NTFS, ext2,
+  ext3, or ext4. Formatter availability is checked in UDisks before unmounting
+  or erasing the drive. The CLI also creates new data-disk image files without
+  drive access. See [FORMATTING.md](FORMATTING.md) for geometry and label limits.
 - Command-line access to the same storage operations and SHA-256 calculation.
 - A standalone executable archive, a desktop launcher, and Debian packaging.
 - Windows To Go edition selection, native NTFS deployment, and boot/policy
@@ -125,6 +128,12 @@ The detailed implementation and validation checklist is in [PARITY.md](PARITY.md
 ./rufus-linux backup --source /path/to/disk-4kn.img --output /tmp/test.vhdx \
     --format vhdx --sector-size 4096
 ./rufus-linux write /tmp/test.vhdx --output /tmp/restored-4kn.img
+
+# Create data-disk images without accessing a physical drive.
+./rufus-linux format --output /tmp/fat16-data.img --size-mib 64 \
+    --filesystem fat16 --table dos --label STORAGE
+./rufus-linux format --output /tmp/udf-4kn-data.img --size-mib 64 \
+    --filesystem udf --sector-size 4096 --label STORAGE
 
 # Prepare and inspect customized Windows files without erasing a drive.
 ./rufus-linux prepare-windows /path/to/windows.iso --output /tmp/windows-prepared \
@@ -467,3 +476,22 @@ persistence implementation and boot testing remain on the parity checklist.
 - Logs, geometry reports, boot markers, and results are under ignored
   `linux/build/real-media/vhdx-*`. Physical backup/restore, additional producer
   releases, parent chains, and log replay remain acceptance work.
+
+### Version 0.10 validation
+
+- All 217 automated tests passed. FAT16/UDF tests cover MBR/GPT, logical sector
+  sizes from 512 to 4096 bytes, independent filesystem identification, FAT16
+  cluster sizing, the FAT32 4-KiB minimum, Unicode UDF labels, daemon dependency
+  failures before destructive calls, cancellation and protected outputs.
+- Real x86-64, ARM64 and ARM32 Linux kernels mounted and wrote all eight
+  FAT16/UDF MBR/GPT 512/4-KiB combinations in isolated VMs, then read back the
+  markers after shutdown and a second boot: 24 volumes across six VM boots.
+- GTK checks cover both format choices and reject an oversized FAT16 selection
+  before the erase dialog. The 0.10.0 standalone application creates FAT16/UDF
+  images with 512/4096-byte sectors; its desktop startup and Debian build pass.
+- UDisks capability checks use the real daemon's dependency set. The local
+  daemon correctly reported missing system `mkudffs`, despite the private test
+  formatter being available. Physical drives and actual UDisks FAT16/UDF loop
+  formatting were not exercised. Native ARM CI execution and Windows/macOS
+  interoperability remain separate validation work. See [FORMATTING.md](FORMATTING.md).
+- Results and boot logs are under ignored `linux/build/real-media/filesystems-*`.

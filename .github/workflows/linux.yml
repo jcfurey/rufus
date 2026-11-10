@@ -27,7 +27,7 @@ jobs:
       - name: Install native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-gi gir1.2-gtk-4.0 udisks2 dosfstools xorriso xvfb xauth wimtools qemu-utils zstd mtools ntfs-3g 7zip qemu-system-x86 seabios ovmf e2fsprogs fdisk
+          sudo apt-get install -y python3-gi gir1.2-gtk-4.0 udisks2 dosfstools udftools exfatprogs xorriso xvfb xauth wimtools qemu-utils zstd mtools ntfs-3g 7zip qemu-system-x86 seabios ovmf e2fsprogs fdisk
       - name: Install x86 bootloaders and kernel-test dependencies
         if: matrix.platform == 'amd64'
         run: sudo apt-get install -y grub-common grub-pc-bin grub-efi-amd64-bin syslinux busybox-static linux-image-generic
@@ -50,6 +50,8 @@ jobs:
           SYSLINUX_TEST_KERNEL=$(find /boot -maxdepth 1 -name 'vmlinuz-*' -type f | sort -V | tail -n 1)
           sudo install -m644 "$SYSLINUX_TEST_KERNEL" linux/build/syslinux-test-kernel
           make -C linux syslinux-test SYSLINUX_KERNEL=build/syslinux-test-kernel
+          FS_TEST_RELEASE=$(basename "$SYSLINUX_TEST_KERNEL" | sed 's/^vmlinuz-//')
+          make -C linux filesystem-test FS_KERNEL=build/syslinux-test-kernel FS_MODULES="/lib/modules/$FS_TEST_RELEASE"
       - name: Boot ARM64 UEFI media and a real Linux kernel without root
         if: matrix.platform == 'arm64'
         run: |
@@ -63,6 +65,12 @@ jobs:
           python3 linux/tests/vhdx_smoke.py --skip-x86 \
             --arm64-image linux/build/arm64-boot-test/arm-live.img \
             --output-dir linux/build/arm64-vhdx-boot-test
+          ARM_TEST_RELEASE=$(basename "$ARM_TEST_KERNEL" | sed 's/^vmlinuz-//')
+          python3 linux/tests/filesystem_smoke.py --kernel linux/build/arm-test-kernel \
+            --modules "/lib/modules/$ARM_TEST_RELEASE" --busybox /usr/bin/busybox \
+            --firmware-code /usr/share/AAVMF/AAVMF_CODE.fd \
+            --firmware-vars /usr/share/AAVMF/AAVMF_VARS.fd \
+            --output-dir linux/build/arm64-filesystem-test
       - name: Check desktop startup
         run: |
           xvfb-run -a ./linux/dist/rufus-linux gui --smoke-test

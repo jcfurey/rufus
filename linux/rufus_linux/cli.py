@@ -14,6 +14,7 @@ from .core import Cancelled, HASH_ALGORITHMS, RufusError, checksums, human_size,
 from .devices import (backup_device, discover_devices, format_device, freedos_device, live_device, windows_installer,
                       write_to_device)
 from .windows import WindowsOptions, answer_file, prepare_windows
+from .formatting import FS_TOOLS, create_formatted_image
 
 
 def windows_arguments(command, *, installer=True):
@@ -162,12 +163,17 @@ def parser():
     dos.add_argument("--fat", type=int, choices=(16, 32), default=32)
     dos.add_argument("--label", default="FREEDOS")
     dos.add_argument("--no-verify", action="store_true")
-    fmt = commands.add_parser("format", help="erase and format a USB drive with one partition")
-    fmt.add_argument("--device", required=True)
-    fmt.add_argument("--confirm", required=True)
-    fmt.add_argument("--filesystem", choices=("vfat", "exfat", "ntfs", "ext2", "ext3", "ext4"), default="vfat")
+    fmt = commands.add_parser("format", help="create a data partition on a USB drive or NEW image file")
+    destination = fmt.add_mutually_exclusive_group(required=True)
+    destination.add_argument("--device", help="whole USB drive to erase")
+    destination.add_argument("--output", help="NEW disk-image file; no root or physical drive access")
+    fmt.add_argument("--confirm", help="repeat the exact USB drive path to authorize erasing it")
+    fmt.add_argument("--filesystem", choices=tuple(FS_TOOLS), default="vfat", help="vfat selects FAT32; fat16 explicitly selects FAT16")
     fmt.add_argument("--table", choices=("gpt", "dos"), default="gpt")
     fmt.add_argument("--label", default="RUFUS")
+    fmt.add_argument("--size-mib", type=int, help="required with --output; drives use their full capacity")
+    fmt.add_argument("--sector-size", type=int, choices=(512, 1024, 2048, 4096),
+                     help="file images only, default 512; drives use reported logical sectors")
     return root
 
 
@@ -361,8 +367,17 @@ def main(argv=None):
                                         not args.no_verify, cancel, progress)
             print(f"FreeDOS image SHA-256: {result}")
         elif args.command == "format":
-            format_device(select_device(args.device, args.confirm), args.filesystem,
-                          args.label, args.table, cancel, progress)
+            if args.output:
+                if args.size_mib is None:
+                    raise RufusError("Formatting an image file requires --size-mib.")
+                result = create_formatted_image(args.output, args.size_mib * 1024**2, args.filesystem,
+                    args.label, args.table, args.sector_size or 512, cancel, progress)
+                print(f"Formatted image SHA-256: {result}")
+            else:
+                if args.size_mib is not None or args.sector_size is not None:
+                    raise RufusError("--size-mib and --sector-size apply only to --output; drives use their reported geometry.")
+                format_device(select_device(args.device, args.confirm), args.filesystem,
+                              args.label, args.table, cancel, progress)
     except Cancelled as exc:
         print(str(exc), file=sys.stderr)
         return 130
