@@ -43,14 +43,73 @@ are present. File-backed tests alone do not establish bootability.
 | 38-language interface | Pending | Reuse translation catalog, extraction, fallback and layout checks |
 | Portable distribution | Implemented executable archive and .deb | Dependency diagnostics and distribution testing |
 
-## Work sequence
+## Current work plan
 
-1. Windows setup configuration, checksum parity, image containers, and drive backup.
-2. Windows BIOS/UEFI:NTFS and FreeDOS boot media; boot-test infrastructure.
-3. Linux ISO extraction and persistence.
-4. Windows To Go and remaining container/deployment formats.
-5. Downloads, media diagnostics, Secure Boot validation, translations, and final
-   cross-feature/hardware validation.
+Updated **2026-11-10**, following version **0.11.0**, commit `2ebb3352`.
+Continue with software implementation and validation without physical storage
+or target boards. Hardware acceptance remains a separate stage; pending
+hardware checks do not prevent the work below.
+
+### Established baseline
+
+- 227 automated tests pass. Standalone and Debian packages build, and GTK checks
+  pass.
+- Debian Live 13.7.0 passes twelve positive BIOS/UEFI USB VM boots across hybrid,
+  extracted GRUB and extracted Syslinux persistence layouts. A control with
+  persistence disabled correctly fails the live-root check.
+- ARM32 and ARM64 media boot real kernels through UEFI and USB in emulation.
+  FAT16/UDF mount/write/reboot/read tests also pass on x86-64, ARM32 and ARM64.
+- DragonOS persistence passes at the established live-root checkpoint before
+  vendor user/desktop customization. A later checkpoint stalled during user/init
+  customization in the cached image. Full userspace startup remains unvalidated.
+
+Kernel handoff, live-root persistence and full userspace startup are distinct
+acceptance milestones. The current results establish the first two on the
+tested configurations; they do not establish a complete desktop session or
+full ARM live-root persistence. See [PERSISTENCE.md](PERSISTENCE.md).
+
+### Hardware-free priorities
+
+The next milestone is **full Linux startup**, followed by **ARM persistence**.
+All milestones below remain open unless their acceptance evidence is recorded.
+
+| Priority | Milestone | Work without physical hardware | Required acceptance evidence |
+| --- | --- | --- | --- |
+| 1 | Full Linux startup and user-session persistence | Diagnose the cached DragonOS customization stall, distinguishing media, harness and backend causes. Boot representative Debian/DragonOS images through userspace in VMs and test persisted user files. | Complete startup logs, a usable user session, and user-file write/shutdown/reboot/read checks through each tested boot layout. Document any remaining vendor or fixture issues. |
+| 2 | ARM32/ARM64 live-root persistence | Build or obtain matching kernel, userspace, initramfs and UEFI fixtures. Extend the existing ARM kernel tests to mount the real live root and persistence store. Execute native ARM host CI when a runner is available. | ARM32 and ARM64 UEFI live-root write/reboot/read checks, disabled-persistence controls, and recorded fixture provenance. Record native ARM host results separately from emulated guest results. |
+| 3 | Windows Setup, OOBE and To Go coverage | Complete installations in private VM disks; check hardware-check bypass, account/privacy/locale/encryption options and remaining setup choices. Expand release/layout coverage, including x86 and ARM64 Windows targets when suitable OS/WinPE media are available. | Actual Setup/OOBE completion and resulting settings, plus boot and portable-policy checks for each tested edition/architecture/layout. ARM32/Windows RT remains unsupported. |
+| 4 | Storage formats and diagnostics | Implement FFU/VTSI, differencing VHD/VHDX and VHDX log replay. Expand producer interoperability and large sparse-image boundaries. Exercise read/write failures, interruptions, permissions and fake-capacity detection with fault injection. | Independent producer/consumer checks, malformed/parent-chain/recovery fixtures, bounded-resource checks, cancellation and protected-output evidence. Simulated media faults must be labeled as simulations. |
+| 5 | Secure Boot and UEFI media validation | Implement PE hashing/signature handling, DBX/SBAT checks and runtime media-validation integration. Exercise applicable signed boot components and enrolled test keys in virtual firmware. | Known signature/revocation fixtures and recorded firmware accept/reject results for each supported test configuration. Separate emulated firmware results from physical firmware acceptance. |
+| 6 | SDK-Manager-free Jetson workflow coverage | Expand offline BSP/release/carrier-profile checks, storage command plans, vendor-image inspection and simulated recovery failures. Cover identity changes, cancellation, logs and helper failures. | Reproducible plan fixtures and failure-handling tests for supported model/storage combinations. Offline checks do not certify BSP/carrier compatibility or actual recovery flashing. |
+| 7 | Desktop and distribution parity | Add official-source downloads with integrity, cancellation and caching; translations; accessibility and keyboard navigation; dependency diagnostics; and broader Linux distribution testing. | GTK interaction/accessibility coverage, locale/fallback/layout checks, download integrity/failure fixtures, and package/startup results on the tested distributions and native host architectures. |
+
+ReFS still needs Linux backend feasibility research. MS-DOS needs supported
+source media and extraction/boot validation. Additional formatter, container
+producer and Windows/macOS interoperability checks can also use disposable
+images or VMs where suitable tools and media are available.
+
+### Physical-hardware acceptance
+
+Keep these items open after software and VM milestones pass:
+
+- Real USB controller/enclosure behavior, hotplug and disconnect races,
+  stacked-storage protection, physical 4Kn drives and sustained large-drive I/O.
+- Actual faulty/fake-capacity media, device-cache behavior and interruption or
+  power-loss recovery. Fault-injection results cannot certify these behaviors.
+- Booting prepared media on physical BIOS/UEFI systems, including real Secure
+  Boot implementations and firmware-specific behavior.
+- Raspberry Pi and other vendor-board boot/firmware combinations.
+- Jetson recovery USB operation, QSPI/boot-firmware compatibility and real
+  SD/NVMe/eMMC/USB installations across release/carrier/model combinations.
+- Native ARM GUI/storage behavior on physical hosts, including ARM32, beyond
+  the coverage obtainable from native CI and emulated guests.
+
+Record the exact media, architecture, firmware, layout and validation stage for
+each result. Keep source and prepared images unchanged by using private VM
+overlays, and retain logs and checksums. Update the feature/platform tables only
+when the corresponding acceptance evidence exists.
+
+### Validation execution
 
 Privileged integration tests are opt-in and use one explicitly elevated run.
 Development checks must not produce repeated Polkit password dialogs. No
