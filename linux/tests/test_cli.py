@@ -21,6 +21,8 @@ class CliTests(unittest.TestCase):
              contextlib.redirect_stderr(io.StringIO()):
             for command in ("write", "linux"):
                 self.assertEqual(main([command, "image.img", "--device", "/dev/sdz"]), 1)
+            self.assertEqual(main(["jetson", "image.iso", "--model", "orin-nano", "--storage", "nvme",
+                                   "--device", "/dev/sdz"]), 1)
             discover.assert_not_called()
 
     def test_write_file_end_to_end(self):

@@ -71,6 +71,7 @@ def main():
     parser.add_argument("--initrd-path", default="/casper/initrd.gz")
     parser.add_argument("--timeout", type=int, default=240, help="seconds per boot")
     parser.add_argument("--firmware", choices=("direct", "bios", "uefi", "all"), default="direct")
+    parser.add_argument("--layout", choices=("hybrid", "extract"), default="hybrid")
     args = parser.parse_args()
     qemu, qemu_img = shutil.which("qemu-system-x86_64"), shutil.which("qemu-img")
     if not qemu or not qemu_img:
@@ -80,7 +81,11 @@ def main():
     root.mkdir(parents=True, exist_ok=False)
     prepared = args.prepared.resolve() if args.prepared else root / "live.img"
     if not args.prepared:
-        live.create_live_image(args.iso, prepared, 256 * live.MIB)
+        if args.layout == "extract":
+            from rufus_linux.linux_iso import create_extracted_image
+            create_extracted_image(args.iso, prepared, persistence_size=256 * live.MIB)
+        else:
+            live.create_live_image(args.iso, prepared, 256 * live.MIB)
     kernel, initrd = root / "vmlinuz", root / "test-initrd"
     core.run_tool(live.iso_command(args.iso.resolve(), "-osirrox", "on", "-extract", args.kernel_path, str(kernel),
                                    "-extract", args.initrd_path, str(initrd)))
@@ -93,16 +98,29 @@ def main():
     backing = prepared
     if args.firmware != "direct":
         config = root / "grub.cfg"
-        core.run_tool(live.iso_command(prepared, "-osirrox", "on", "-extract", "/boot/grub/grub.cfg", str(config)))
+        if args.layout == "extract":
+            core.run_tool(["mcopy", "-i", f"{prepared}@@{live.MIB}", "::/boot/rufus/grub.cfg", str(config)])
+        else:
+            core.run_tool(live.iso_command(prepared, "-osirrox", "on", "-extract", "/boot/grub/grub.cfg", str(config)))
         text = config.read_text()
-        text, count = re.subn(r"(?<!\S)boot=casper(?=\s|$)", "boot=casper console=ttyS0 ip=frommedia", text)
+        if args.layout == "extract":
+            count = text.count('"boot=casper"')
+            text = text.replace('"boot=casper"', '"boot=casper" "console=ttyS0" "ip=frommedia"')
+        else:
+            text, count = re.subn(r"(?<!\S)boot=casper(?=\s|$)", "boot=casper console=ttyS0 ip=frommedia", text)
         if not count:
             raise RuntimeError("Firmware harness needs a Casper GRUB configuration.")
+        text = re.sub(r"(?m)^\s*set\s+timeout=.*$", "set timeout=0", text)
         config.write_text("serial --unit=0 --speed=115200\nterminal_input serial\nterminal_output serial\n"
                           "set timeout=0\nset timeout_style=hidden\n" + text)
         backing = root / "firmware-test.img"
-        core.run_tool(live.iso_command(prepared, "-outdev", str(backing), "-map", str(config), "/boot/grub/grub.cfg",
-                                       "-map", str(initrd), args.initrd_path, "-boot_image", "any", "replay", "-end"))
+        if args.layout == "extract":
+            shutil.copyfile(prepared, backing)
+            core.run_tool(["mcopy", "-o", "-i", f"{backing}@@{live.MIB}", str(config), "::/boot/rufus/grub.cfg"])
+            core.run_tool(["mcopy", "-o", "-i", f"{backing}@@{live.MIB}", str(initrd), "::" + args.initrd_path])
+        else:
+            core.run_tool(live.iso_command(prepared, "-outdev", str(backing), "-map", str(config), "/boot/grub/grub.cfg",
+                                           "-map", str(initrd), args.initrd_path, "-boot_image", "any", "replay", "-end"))
     for mode in modes:
         overlay = root / f"{mode}-persistence.qcow2"
         core.run_tool([qemu_img, "create", "-f", "qcow2", "-F", "raw", "-b", str(backing), str(overlay)])
@@ -111,8 +129,8 @@ def main():
             nvram = root / "uefi-vars.fd"
             shutil.copyfile(variables, nvram)
             machine = "q35,accel=tcg"
-            boot_args = ["-drive", f"if=pflash,format=raw,readonly=on,file={code}",
-                         "-drive", f"if=pflash,format=raw,file={nvram}"]
+            boot_args = ["-drive", "if=pflash,format=raw,readonly=on,file=" + str(code).replace(",", ",,"),
+                         "-drive", "if=pflash,format=raw,file=" + str(nvram).replace(",", ",,")]
         else:
             machine, boot_args = "pc,accel=tcg", ["-bios", str(bios)]
             if mode == "direct":
@@ -124,7 +142,7 @@ def main():
             command = [qemu, "-machine", machine, "-m", "2048", "-smp", "2", "-nodefaults", "-nic", "none",
                        "-display", "none", "-serial", "stdio", "-monitor", "none", "-no-reboot",
                        "-L", str(firmware), "-device", "VGA,romfile=" + str(bios.parent / "vgabios-stdvga.bin"),
-                       *boot_args, "-drive", f"if=ide,format=qcow2,file={overlay}"]
+                       *boot_args, "-drive", "if=ide,format=qcow2,file=" + str(overlay).replace(",", ",,")]
             with log.open("xb") as stream:
                 try:
                     result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=stream, stderr=subprocess.STDOUT,

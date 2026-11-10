@@ -32,7 +32,7 @@ To create an Ubuntu package:
 
 ```sh
 make -C linux deb
-sudo apt install ./linux/dist/rufus-linux_0.4.0_all.deb
+sudo apt install ./linux/dist/rufus-linux_0.5.0_all.deb
 ```
 
 Alternatively, install the application and desktop launcher for your user:
@@ -68,6 +68,12 @@ Your desktop session must have `$HOME/.local/bin` on `PATH` for that launcher.
   Debian hybrid ISOs. Adds an ext4 partition and live boot options while
   retaining the ISO's bootloaders, volume identity, and firmware support.
   Available in the desktop's Linux live USB mode and the `linux` CLI command.
+- FAT32 extraction for conventional GRUB Casper/Debian live ISOs: x86 BIOS,
+  x86-64 BIOS/UEFI, ARM64 UEFI, and 32-bit ARM UEFI, with optional persistence.
+  Detects kernel architecture and installs matching GRUB loaders and modules.
+- NVIDIA Jetson installer USB preparation, legacy developer-kit SD-image
+  writing, model/storage instructions, recovery USB inspection, and a handoff
+  to the installed NVIDIA SDK Manager wizard.
 - Windows setup options in the desktop and CLI: TPM/Secure Boot/RAM check bypass,
   offline/local account setup, privacy choices, explicit Windows locale/time zone,
   and automatic device-encryption control. WinPE options are injected into the
@@ -80,7 +86,7 @@ Your desktop session must have `$HOME/.local/bin` on `PATH` for that launcher.
 - A standalone executable archive, a desktop launcher, and Debian packaging.
 
 This is an initial port, **not full parity with Windows Rufus**. Windows To Go,
-remaining advanced Windows setup options, general Linux ISO extraction to FAT32,
+remaining advanced Windows setup options, Syslinux-specific ISO extraction,
 ISO downloads, Secure Boot revocation checks,
 VHDX/FFU/VTSI support, translations, and destructive bad-block testing are not
 implemented. DD mode preserves whatever boot support is already in an image.
@@ -115,6 +121,10 @@ The detailed implementation and validation checklist is in [PARITY.md](PARITY.md
     --filesystem ntfs --firmware uefi --local-account alice --privacy
 ./rufus-linux linux /path/to/DragonOS_Resolute_R2.2.iso \
     --output /tmp/dragonos-persistent.img --persistence-mib 4096
+./rufus-linux linux /path/to/arm64-live.iso --mode extract \
+    --output /tmp/arm64-fat32.img --persistence-mib 1024
+./rufus-linux linux /path/to/armhf-live.iso --mode extract \
+    --architecture arm --output /tmp/arm32-fat32.img
 
 # DESTRUCTIVE: /dev/sdX must be replaced with a drive from `devices`.
 ./rufus-linux write /path/to/hybrid-linux.iso --device /dev/sdX --confirm /dev/sdX
@@ -172,6 +182,27 @@ drives, the backup partition table is relocated to the drive's end; unused space
 after the requested persistence volume remains unallocated. Creating a large
 full-drive image still requires reading its complete logical size for checksum
 verification. File-backed output uses the space needed by the rebuilt image.
+
+## Extracted media, ARM boards, and NVIDIA Jetson
+
+In **Linux live USB**, choose **FAT32 files** to extract a supported GRUB
+Casper/Debian ISO. Kernel headers select x86 BIOS, x86-64 BIOS/UEFI, ARM64 UEFI,
+or ARM32 UEFI. Install `grub-common` and the target's GRUB data package:
+`grub-pc-bin`, `grub-efi-amd64-bin`, `grub-efi-arm64-bin`, or `grub-efi-arm-bin`.
+The generated UEFI loaders are unsigned and require Secure Boot to be disabled.
+CLI extraction defaults to no persistence; add `--persistence-mib` to enable it.
+The application uses native Python/GI on x86 or ARM Linux hosts.
+
+Raspberry Pi and firmware-specific board images use **Disk image (DD)** mode,
+which preserves the vendor's complete boot and partition layout. The new
+**NVIDIA Jetson** mode provides model/storage instructions, unchanged NVIDIA
+installer USB creation, legacy developer-kit SD-image writing, and a handoff to
+the installed NVIDIA SDK Manager recovery wizard. Installer USB media and the
+Jetson's installation target are separate selections. No Jetson firmware is
+flashed by Rufus itself.
+
+See [PLATFORMS.md](PLATFORMS.md) for ARM dependencies, supported Jetson workflows,
+commands, and hardware validation limits.
 
 ## Storage behavior
 
@@ -308,3 +339,25 @@ persistence implementation and boot testing remain on the parity checklist.
   under ignored `linux/build/real-media/dragonos-*`. Debian has file-backed
   partition/configuration tests; a real Debian live reboot remains unvalidated.
   Secure Boot and physical USB hardware remain separate acceptance work.
+
+### Version 0.5 validation
+
+- All 130 automated tests passed with the local toolset. They include ARM32/ARM64
+  kernel/EFI checks, FAT32 extraction, correct removable loader paths,
+  persistence, regenerated manifests, native 32/64-bit capacity requests, Jetson
+  method restrictions, embedded NVIDIA EFI validation, unchanged vendor/board
+  image restoration, and failures before device access.
+- GTK tests passed for extracted-media options, ARM controls, all Jetson model
+  selections, recovery setup without host-drive selection, confirmation
+  cancellation, and asynchronous checksums.
+- ARM64 and ARM32 images booted real Ubuntu Linux 7.0 kernels and static BusyBox
+  initramfs through QEMU, AAVMF/AAVMF32, USB, FAT32, and the generated GRUB loader.
+  The guests reported `aarch64` and `armv7l` and powered off successfully. Full
+  ARM live-distribution persistence remains an additional acceptance test.
+- DragonOS extracted to FAT32 with 256 MiB persistence passed real Casper
+  marker-file write/reboot/read tests through both BIOS and UEFI. Test copies
+  used private initramfs instrumentation. Artifacts are retained under
+  `linux/build/real-media/dragonos-fat32*`, `arm64-uefi-test-2`, and `arm32-uefi-test`.
+- Native ARM64 CI was added but has not run remotely in this session. Real
+  NVIDIA ISO and physical Jetson installation/QSPI validation remain outstanding;
+  current Jetson tests use structural fixtures and mocked SDK Manager launches.

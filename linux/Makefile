@@ -1,9 +1,10 @@
 PYTHON ?= /usr/bin/python3
 PREFIX ?= /usr/local
 DESTDIR ?=
-VERSION = 0.4.0
+VERSION = 0.5.0
 LIVE_ISO ?=
 LIVE_OUTPUT ?= build/live-reboot-test
+LIVE_LAYOUT ?= hybrid
 SOURCES = $(wildcard rufus_linux/*.py)
 RESOURCES = $(wildcard ../res/freedos/* ../src/ms-sys/inc/*.h) ../res/uefi/uefi-ntfs.img
 
@@ -36,7 +37,7 @@ uefi-test:
 	$(PYTHON) tests/uefi_smoke.py
 
 live-test:
-	$(PYTHON) tests/live_smoke.py "$(LIVE_ISO)" --output-dir "$(LIVE_OUTPUT)" --firmware all
+	$(PYTHON) tests/live_smoke.py "$(LIVE_ISO)" --output-dir "$(LIVE_OUTPUT)" --firmware all --layout "$(LIVE_LAYOUT)"
 
 integration:
 	$(PYTHON) tests/udisks_integration.py

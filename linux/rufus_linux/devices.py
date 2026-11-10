@@ -250,6 +250,14 @@ def validate_format(device, filesystem, label, table):
         raise RufusError("FAT32 labels require ASCII and cannot contain + . , ; = [ ].")
 
 
+def disk_capacity(fd):
+    # Linux fs.h encodes sizeof(size_t) in BLKGETSIZE64, even though the
+    # returned argument is always u64. ARM32 therefore needs a different
+    # request number from ARM64/x86-64.
+    request = 0x80001272 | (struct.calcsize("P") << 16)
+    return struct.unpack("Q", fcntl.ioctl(fd, request, b"\0" * 8))[0]
+
+
 def write_to_device(source, device, expected="", verify=True, cancel=None, progress=None):
     with prepare_image(source, expected, cancel, progress) as image:
         device = guard(device, source)
@@ -267,7 +275,7 @@ def write_to_device(source, device, expected="", verify=True, cancel=None, progr
         try:
             info = os.fstat(fd)
             actual = f"{os.major(info.st_rdev)}:{os.minor(info.st_rdev)}"
-            capacity = struct.unpack("Q", fcntl.ioctl(fd, 0x80081272, b"\0" * 8))[0]
+            capacity = disk_capacity(fd)
             if not stat.S_ISBLK(info.st_mode) or actual != device.number or capacity != device.size:
                 raise RufusError("Opened drive does not match the selected drive.")
             guard(device, source)
@@ -308,18 +316,28 @@ def windows_installer(source, device, expected="", verify=True, cancel=None, pro
 
 
 def live_device(source, device, persistence_size=1024 * 1024**2, casper_label="writable",
-                expected="", verify=True, cancel=None, progress=None):
+                expected="", verify=True, cancel=None, progress=None, *, mode="hybrid", architecture="auto", firmware=None):
     from .live import create_live_image, validate_persistence
 
-    validate_persistence(persistence_size, casper_label)
+    if mode not in ("hybrid", "extract"):
+        raise RufusError("Select hybrid or FAT32 extraction mode for Linux media.")
+    if mode == "hybrid" or persistence_size:
+        validate_persistence(persistence_size, casper_label)
+    if mode == "hybrid" and (architecture != "auto" or firmware is not None):
+        raise RufusError("Hybrid mode retains the ISO's architecture and firmware support.")
     guard(device, source)
     if device.logical_sector != 512:
         raise RufusError("Persistent live media currently requires 512-byte logical sectors.")
     with tempfile.TemporaryDirectory(prefix="rufus-live-drive-") as directory:
         guard(device, directory)
         image = Path(directory) / "live.img"
-        result = create_live_image(source, image, persistence_size, casper_label, device.size,
-                                   expected, cancel, progress)
+        if mode == "extract":
+            from .linux_iso import create_extracted_image
+            result = create_extracted_image(source, image, device.size, persistence_size, casper_label,
+                                            architecture, firmware, expected, cancel, progress)
+        else:
+            result = create_live_image(source, image, persistence_size, casper_label, device.size,
+                                       expected, cancel, progress)
         guard(device, source)
         write_to_device(image, device, result["sha256"], verify, cancel, progress)
     return result["source_sha256"]
@@ -350,7 +368,7 @@ def backup_device(device, output, image_format="raw", verify=True, cancel=None, 
         actual = f"{os.major(info.st_rdev)}:{os.minor(info.st_rdev)}"
         if not stat.S_ISBLK(info.st_mode) or actual != device.number:
             raise RufusError("Opened drive does not match the selected backup source.")
-        capacity = struct.unpack("Q", fcntl.ioctl(fd, 0x80081272, b"\0" * 8))[0]
+        capacity = disk_capacity(fd)
         if capacity != device.size:
             raise RufusError("The selected drive size changed. Refresh and retry.")
         guard(device, parent, writable=False)

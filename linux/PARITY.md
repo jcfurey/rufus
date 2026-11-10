@@ -31,7 +31,8 @@ are present. File-backed tests alone do not establish bootability.
 | Windows To Go | Pending | WIM application, offline registry, BCD creation, BIOS/UEFI boot validation |
 | FreeDOS | Implemented, desktop/CLI; SeaBIOS boots FAT16 and FAT32 through COMMAND.COM | Physical hardware and regional keyboard configuration |
 | MS-DOS | Pending | Supported source extraction and boot tests |
-| Syslinux/GRUB ISO extraction mode | Pending | Version matching, config rewriting and boot fixtures |
+| GRUB ISO extraction mode | Implemented FAT32 for conventional Casper/Debian menus; x86 BIOS/UEFI, ARM64 UEFI, ARM32 UEFI, optional persistence | Additional distributions, full ARM live-root persistence, Secure Boot and physical devices |
+| Syslinux ISO extraction mode | Pending | Version matching, config rewriting and boot fixtures |
 | Linux persistence | Implemented for Casper/DragonOS and Debian hybrid ISOs, desktop and CLI; real DragonOS write/reboot/read passes under BIOS and UEFI | Real Debian and additional distro reboots; Secure Boot and physical USB validation |
 | Windows ISO and UEFI Shell download | Pending | Official-source catalog, cancellation, integrity and caching |
 | UEFI runtime media validation | Pending | Validation loader integration and firmware tests |
@@ -68,5 +69,22 @@ retained. Casper/DragonOS uses ext4 labeled `writable` (or `casper-rw` for older
 images); Debian uses `persistence` with `/ union` in `persistence.conf`. All
 preparation completes before entering the common disk writer. DragonOS's actual
 Casper root overlay passed marker-file write/reboot/read tests through BIOS and
-UEFI in private VM overlays. Native extraction to FAT32 with independently
-installed Syslinux/GRUB remains pending; persistence does not depend on it.
+UEFI in private VM overlays. Native FAT32 extraction now installs matching GRUB
+loaders/modules and passes DragonOS persistence reboots under BIOS and UEFI.
+ARM64 and ARM32 UEFI USB images also boot real Linux kernels in QEMU. Syslinux
+extraction remains pending.
+
+## Additional requested platforms
+
+| Platform | Implementation | Remaining acceptance work |
+| --- | --- | --- |
+| ARM64/ARM32 UEFI media | Kernel-header detection, correct EFI loader names, matching GRUB data; real kernel boot tests pass | Full live-distribution persistence, Secure Boot and physical boards |
+| Native ARM Linux host | Architecture-independent Python/GI, native capacity ioctl, ARM64 CI job added | Execute remote native ARM CI; native ARM32 GUI/storage hardware |
+| Raspberry Pi/vendor board images | Complete compressed/raw/ZIP image restoration preserves boot layout; multi-partition round trips pass | Physical board and firmware combinations |
+| Jetson Orin/Thor installer USB | Vendor ISO retained unchanged; NVIDIA overlay/repository and ARM64 loader checked, including embedded ESP | Real vendor ISO and physical target installations |
+| Legacy Jetson SD media | Model/method restrictions, verified complete-image restoration | Actual developer-kit images, QSPI compatibility and physical boots |
+| Jetson recovery/eMMC/NVMe | Read-only NVIDIA USB inspection and installed SDK Manager wizard handoff across listed families | Physical recovery flashing; vendor BSP/release/carrier compatibility |
+
+ARM media and model-specific Jetson workflows are documented in
+[PLATFORMS.md](PLATFORMS.md). Generic ARM boot validation does not establish
+Jetson firmware or Raspberry Pi boot compatibility.

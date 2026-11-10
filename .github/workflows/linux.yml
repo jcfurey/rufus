@@ -13,19 +13,44 @@ permissions:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: amd64
+          - runner: ubuntu-24.04-arm
+            platform: arm64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
       - name: Install native dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y python3-gi gir1.2-gtk-4.0 udisks2 dosfstools xorriso xvfb xauth wimtools qemu-utils zstd mtools ntfs-3g 7zip qemu-system-x86 seabios ovmf e2fsprogs fdisk
+      - name: Install matching x86 GRUB data
+        if: matrix.platform == 'amd64'
+        run: sudo apt-get install -y grub-common grub-pc-bin grub-efi-amd64-bin
+      - name: Install native ARM GRUB and boot-test dependencies
+        if: matrix.platform == 'arm64'
+        run: sudo apt-get install -y grub-common grub-efi-arm64-bin qemu-system-arm qemu-efi-aarch64 busybox-static linux-image-generic
       - name: Test image writing and drive protection
         run: make -C linux check
       - name: Build standalone application and Ubuntu package
         run: make -C linux all deb
       - name: Boot generated BIOS and UEFI media without root
+        if: matrix.platform == 'amd64'
         run: make -C linux boot-test uefi-test
+      - name: Boot ARM64 UEFI media and a real Linux kernel without root
+        if: matrix.platform == 'arm64'
+        run: |
+          ARM_TEST_KERNEL=$(find /boot -maxdepth 1 -name 'vmlinuz-*' -type f | sort -V | tail -n 1)
+          sudo install -m644 "$ARM_TEST_KERNEL" linux/build/arm-test-kernel
+          python3 linux/tests/arm_smoke.py --architecture arm64 \
+            --kernel linux/build/arm-test-kernel --busybox /usr/bin/busybox \
+            --firmware-code /usr/share/AAVMF/AAVMF_CODE.fd \
+            --firmware-vars /usr/share/AAVMF/AAVMF_VARS.fd \
+            --output-dir linux/build/arm64-boot-test
       - name: Check desktop startup
         run: |
           xvfb-run -a ./linux/dist/rufus-linux gui --smoke-test
@@ -35,7 +60,7 @@ jobs:
           GSK_RENDERER: cairo
       - uses: actions/upload-artifact@v7
         with:
-          name: rufus-linux
+          name: rufus-linux-${{ matrix.platform }}
           path: |
             linux/dist/rufus-linux
             linux/dist/*.deb

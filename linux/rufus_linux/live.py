@@ -91,6 +91,9 @@ def update_manifest(text, changed, algorithm, exclude=None):
 
 
 def stage_configs(source, directory, cancel=None):
+    if tool_text(iso_command(source, "-find", "/", "-type", "f", "-name", "*.nvidia.squashfs",
+                             "-exec", "echo", "--"), cancel).strip():
+        raise RufusError("Use Jetson installer mode to preserve NVIDIA's installer and firmware support unchanged.")
     listing = tool_text(iso_command(source, "-find", "/", "-type", "f", "-size", "-8388609c",
                                     "-exec", "echo", "--"), cancel)
     paths = shlex.split(listing)

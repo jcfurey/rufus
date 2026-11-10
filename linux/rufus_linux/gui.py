@@ -14,6 +14,7 @@ from .core import RufusError, checksums, expected_sha256, human_size
 from .devices import (backup_device, discover_devices, format_device, freedos_device, live_device,
                       windows_installer, write_to_device)
 from .windows import WindowsOptions
+from .jetson import MODELS as JETSON_MODELS, installation_plan
 
 
 class Window(Gtk.ApplicationWindow):
@@ -57,8 +58,10 @@ class Window(Gtk.ApplicationWindow):
 
         self.form = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         outer.append(self.form)
-        self.form.append(self.label("Device"))
+        self.device_heading = self.label("Device")
+        self.form.append(self.device_heading)
         device_row = Gtk.Box(spacing=8)
+        self.device_row = device_row
         self.drive = Gtk.DropDown.new_from_strings(["Select a USB drive…"])
         self.drive.set_hexpand(True)
         self.drive.connect("notify::selected", lambda *_: self.update_controls())
@@ -79,7 +82,8 @@ class Window(Gtk.ApplicationWindow):
             "Non-bootable — format drive",
             "Save drive to image — backup",
             "FreeDOS (BIOS) — bundled DOS boot media",
-            "Linux live USB — persistent Casper / DragonOS / Debian"])
+            "Linux live USB — ISO layout / FAT32 files / persistence",
+            "NVIDIA Jetson — installer / SD image / recovery setup"])
         self.mode.connect("notify::selected", lambda *_: self.update_controls())
         self.form.append(self.mode)
         self.image_row = Gtk.Box(spacing=8)
@@ -130,6 +134,18 @@ class Window(Gtk.ApplicationWindow):
         self.form.append(self.freedos_box)
 
         self.live_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.live_layout = Gtk.DropDown.new_from_strings(["ISO layout — preserve original bootloaders",
+                                                         "FAT32 files — install matching GRUB"])
+        self.live_box.append(self.live_layout)
+        self.live_target = Gtk.Box(spacing=8)
+        self.live_arch = Gtk.DropDown.new_from_strings(["Detect kernel architecture", "x86-64", "ARM64 / AArch64",
+                                                       "32-bit ARM", "32-bit x86"])
+        self.live_firmware = Gtk.DropDown.new_from_strings(["Automatic firmware", "BIOS + UEFI", "UEFI", "BIOS"])
+        self.live_target.append(self.live_arch)
+        self.live_target.append(self.live_firmware)
+        self.live_box.append(self.live_target)
+        self.live_persist = Gtk.CheckButton(label="Keep changes between boots (persistence)", active=True)
+        self.live_box.append(self.live_persist)
         self.live_box.append(self.label("Persistence size (MiB)"))
         self.persistence = Gtk.SpinButton.new_with_range(64, 16 * 1024 * 1024, 64)
         self.persistence.set_value(1024)
@@ -139,6 +155,21 @@ class Window(Gtk.ApplicationWindow):
                                                          "Older Casper (casper-rw)"])
         self.live_box.append(self.casper_label)
         self.form.append(self.live_box)
+
+        self.jetson_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.jetson_model = Gtk.DropDown.new_from_strings([value[0] for value in JETSON_MODELS.values()])
+        self.jetson_storage = Gtk.DropDown.new_from_strings(["Install onto Jetson NVMe", "Install onto Jetson microSD",
+                                                            "Install onto Jetson eMMC", "Install onto Jetson USB storage"])
+        self.jetson_method = Gtk.DropDown.new_from_strings(["Create NVIDIA installer USB — current Orin / Thor",
+                                                           "Write legacy NVIDIA SD-card image",
+                                                           "Recovery flashing — open NVIDIA SDK Manager"])
+        for widget in (self.jetson_model, self.jetson_storage, self.jetson_method):
+            self.jetson_box.append(widget)
+        self.jetson_guide = Gtk.LinkButton.new_with_label(
+            "https://docs.nvidia.com/jetson/archives/r39.2.1/DeveloperGuide/SD/FlashingSupport.html",
+            "NVIDIA installation instructions")
+        self.jetson_box.append(self.jetson_guide)
+        self.form.append(self.jetson_box)
 
         self.format_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.format_box.append(self.label("Partition scheme and filesystem"))
@@ -191,6 +222,10 @@ class Window(Gtk.ApplicationWindow):
         outer.append(buttons)
         self.win_filesystem.connect("notify::selected", lambda *_: self.update_controls())
         self.win_firmware.connect("notify::selected", lambda *_: self.update_controls())
+        self.live_layout.connect("notify::selected", lambda *_: self.update_controls())
+        self.live_persist.connect("toggled", lambda *_: self.update_controls())
+        for widget in (self.jetson_model, self.jetson_storage, self.jetson_method):
+            widget.connect("notify::selected", lambda *_: self.update_controls())
         self.update_controls()
         self.refresh()
         GLib.timeout_add_seconds(5, self.periodic_refresh)
@@ -207,39 +242,67 @@ class Window(Gtk.ApplicationWindow):
 
     def update_controls(self):
         mode = self.mode.get_selected()
-        self.image_row.set_visible(mode not in (2, 4))
-        self.hash_box.set_visible(mode in (0, 1, 5))
-        self.verify.set_visible(mode != 2)
+        recovery = mode == 6 and self.jetson_method.get_selected() == 2
+        self.image_row.set_visible(mode not in (2, 4) and not recovery)
+        self.hash_box.set_visible(mode in (0, 1, 5, 6) and not recovery)
+        self.verify.set_visible(mode != 2 and not recovery)
+        self.device_heading.set_visible(not recovery)
+        self.device_row.set_visible(not recovery)
         self.format_box.set_visible(mode == 2)
         self.windows_box.set_visible(mode == 1)
         self.windows_media.set_visible(mode == 1)
         self.backup_format.set_visible(mode == 3)
         self.freedos_box.set_visible(mode == 4)
         self.live_box.set_visible(mode == 5)
+        self.jetson_box.set_visible(mode == 6)
+        extracted = self.live_layout.get_selected() == 1
+        self.live_target.set_visible(extracted)
+        self.live_persist.set_sensitive(extracted)
+        if not extracted:
+            self.live_persist.set_active(True)
+        self.persistence.set_sensitive(self.live_persist.get_active())
+        self.casper_label.set_sensitive(self.live_persist.get_active())
         self.choose.set_label("Save as…" if mode == 3 else "Select image…")
         selected_path = self.output if mode == 3 else self.image
         self.image_label.set_text(Path(selected_path).name if selected_path else
                                   "Choose a new image filename" if mode == 3 else "No image selected")
         self.image_label.set_tooltip_text(selected_path)
-        self.start.set_label("Save image" if mode == 3 else "Start")
+        self.start.set_label("Open SDK Manager" if recovery else "Save image" if mode == 3 else "Start")
         self.mode_note.set_text((
-            "Writes the image's partition layout. Supports compressed images, ZIP, and fixed/dynamic VHD.",
+            "Restores complete disk and board images, including ARM and Raspberry Pi firmware layouts. "
+            "Supports compressed images, ZIP, and fixed/dynamic VHD.",
             "Creates GPT + FAT32 media for UEFI PCs. Large install.wim files are split automatically.",
             "Creates one data partition using the selected filesystem.",
             "Opens the USB drive read-only and saves all sectors to a new image file. Existing files are protected.",
             "Creates BIOS/MBR boot media using Rufus's bundled FreeDOS kernel and shell. Requires mtools.",
             "Adds an ext4 persistence partition to a supported hybrid live ISO. Retains its BIOS/UEFI bootloaders. "
-            "Debian persistence is detected automatically. Requires xorriso and e2fsprogs.")[mode])
+            "Debian persistence is detected automatically. Requires xorriso and e2fsprogs.",
+            "Prepares NVIDIA's model-specific installation media or opens its recovery setup.")[mode])
         if mode == 1:
             fs = "FAT32" if self.win_filesystem.get_selected() == 0 else "NTFS"
             target = "UEFI/GPT" if self.win_firmware.get_selected() == 0 else "BIOS/MBR"
             self.mode_note.set_text(f"Prepares {target} Windows media using {fs}, then writes and verifies the image.")
+        if mode == 5 and extracted:
+            self.mode_note.set_text("Creates FAT32 live media with GRUB built for the detected x86 or ARM kernel. "
+                                    "ARM uses UEFI. The generated UEFI loader requires Secure Boot to be disabled. "
+                                    "Use disk-image mode for board-specific Raspberry Pi images.")
+        jetson_valid = True
+        if mode == 6:
+            try:
+                plan = installation_plan(*self.jetson_selection())
+                self.mode_note.set_text("\n".join(plan["steps"]))
+                self.jetson_guide.set_uri(plan["documentation"])
+            except RufusError as exc:
+                self.mode_note.set_text(str(exc))
+                jetson_valid = False
         device = self.selected_device()
         blocked = device is not None and device.reason and not (mode == 3 and device.reason == "Drive is read-only.")
-        self.start.set_sensitive(not self.busy and device is not None and not blocked
-                                 and (mode in (2, 4) or selected_path is not None))
+        self.start.set_sensitive(not self.busy and jetson_valid and (recovery or
+                                 (device is not None and not blocked and (mode in (2, 4) or selected_path is not None))))
         self.hash_button.set_sensitive(self.image is not None and not self.busy)
-        if device:
+        if recovery:
+            self.device_note.set_text("Connect the Jetson's recovery USB port. Board detection and flashing occur in NVIDIA SDK Manager.")
+        elif device:
             self.device_note.set_text(device.reason if blocked else
                 f"{device.path} · {human_size(device.size)} · " +
                 ("Read-only backup; the source drive will be unmounted." if mode == 3 else "All existing data will be erased."))
@@ -402,7 +465,17 @@ class Window(Gtk.ApplicationWindow):
                               timezone=self.win_timezone.get_text(),
                               architecture=("", "amd64", "x86", "arm64", "arm")[self.win_arch.get_selected()])
 
+    def jetson_selection(self):
+        return (tuple(JETSON_MODELS)[self.jetson_model.get_selected()],
+                ("nvme", "sd", "emmc", "usb")[self.jetson_storage.get_selected()],
+                ("installer", "sd", "recovery")[self.jetson_method.get_selected()])
+
     def start_clicked(self, *_):
+        mode = self.mode.get_selected()
+        if mode == 6 and self.jetson_method.get_selected() == 2:
+            from .jetson import launch_sdkmanager
+            self.work(launch_sdkmanager)
+            return
         device = self.selected_device()
         if not device:
             return
@@ -412,11 +485,14 @@ class Window(Gtk.ApplicationWindow):
             self.work(lambda: backup_device(device, output, image_format, verify, self.cancel, self.report))
             return
         try:
-            if mode in (0, 1, 5):
+            if mode in (0, 1, 5, 6):
                 expected_sha256(self.hash.get_text())
+            if mode == 6:
+                installation_plan(*self.jetson_selection())
             if mode == 5:
                 from .live import validate_persistence
-                validate_persistence(self.persistence.get_value_as_int() * 1024**2)
+                if self.live_persist.get_active():
+                    validate_persistence(self.persistence.get_value_as_int() * 1024**2)
             options = self.windows_options()
             if mode == 1:
                 options.validate()
@@ -430,8 +506,12 @@ class Window(Gtk.ApplicationWindow):
         table, label = ("gpt", "dos")[self.table.get_selected()], self.volume.get_text()
         dos_fat, dos_label = (16, 32)[self.freedos_fat.get_selected()], self.freedos_label.get_text()
         win_fs, win_target = ("vfat", "ntfs")[self.win_filesystem.get_selected()], ("uefi", "bios")[self.win_firmware.get_selected()]
-        persistence = self.persistence.get_value_as_int() * 1024**2
+        persistence = self.persistence.get_value_as_int() * 1024**2 if self.live_persist.get_active() else 0
         casper_label = ("writable", "casper-rw")[self.casper_label.get_selected()]
+        live_mode = ("hybrid", "extract")[self.live_layout.get_selected()]
+        live_arch = ("auto", "x86_64", "arm64", "arm", "x86")[self.live_arch.get_selected()]
+        live_firmware = (None, "both", "uefi", "bios")[self.live_firmware.get_selected()]
+        jetson_model, jetson_storage, jetson_method = self.jetson_selection()
         dialog = Gtk.Dialog(title="Erase selected USB drive?", transient_for=self, modal=True)
         dialog.set_default_size(470, 220)
         dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
@@ -464,7 +544,14 @@ class Window(Gtk.ApplicationWindow):
                 self.work(lambda: format_device(device, filesystem, label, table, self.cancel, self.report))
             elif mode == 5:
                 self.work(lambda: live_device(image, device, persistence, casper_label, expected, verify,
-                                             self.cancel, self.report))
+                                             self.cancel, self.report, mode=live_mode,
+                                             architecture=live_arch if live_mode == "extract" else "auto",
+                                             firmware=live_firmware if live_mode == "extract" else None))
+            elif mode == 6:
+                from .jetson import write_media
+                self.work(lambda: write_media(image, model=jetson_model, storage=jetson_storage,
+                                             method=jetson_method, device=device, expected=expected, verify=verify,
+                                             cancel=self.cancel, progress=self.report))
             else:
                 self.work(lambda: freedos_device(device, dos_fat, dos_label, verify=verify,
                                                 cancel=self.cancel, progress=self.report))

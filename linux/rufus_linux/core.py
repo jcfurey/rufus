@@ -275,8 +275,8 @@ def run_tool(args, cancel=None, *, stdin=None, stdout=None):
             raise RufusError(f"{Path(args[0]).name} failed: " + log.read().decode(errors="replace"))
 
 
-def validate_windows_tree(root, require_uefi=True):
-    """Reject links, special files, FAT name collisions, and non-Windows ISOs."""
+def validate_fat_tree(root):
+    """Reject links, special files, and names that cannot be copied to FAT."""
     files = []
     names = {}
     for directory, dirs, children in os.walk(root, followlinks=False):
@@ -295,6 +295,11 @@ def validate_windows_tree(root, require_uefi=True):
             names[key] = path
             if stat.S_ISREG(info.st_mode):
                 files.append((path, relative, info.st_size))
+    return files, names
+
+
+def validate_windows_tree(root, require_uefi=True):
+    files, names = validate_fat_tree(root)
     if require_uefi and not any(f"efi/boot/boot{arch}.efi" in names for arch in ("x64", "aa64", "ia32", "arm")):
         raise RufusError("ISO has no UEFI removable-media bootloader in EFI/BOOT.")
     if "sources/boot.wim" not in names:

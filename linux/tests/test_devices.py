@@ -22,6 +22,15 @@ def usb():
 
 
 class DriveSafetyTests(unittest.TestCase):
+    def test_device_capacity_uses_native_32_or_64_bit_linux_ioctl_abi(self):
+        import struct
+        original = struct.calcsize
+        for pointer_size, request in ((4, 0x80041272), (8, 0x80081272)):
+            with patch.object(devices.struct, "calcsize", side_effect=lambda fmt: pointer_size if fmt == "P" else original(fmt)), \
+                 patch.object(devices.fcntl, "ioctl", return_value=struct.pack("Q", 8 * 1024**3)) as ioctl:
+                self.assertEqual(devices.disk_capacity(99), 8 * 1024**3)
+                ioctl.assert_called_once_with(99, request, b"\0" * 8)
+
     def test_discovery_explicitly_requests_tree_for_partition_safety(self):
         import json
         result = MagicMock(returncode=0, stdout=json.dumps({"blockdevices": [node(children=[

@@ -53,17 +53,40 @@ def parser():
     write.add_argument("--confirm", help="repeat the exact device path to authorize erasing it")
     write.add_argument("--sha256", default="", help="expected SHA-256 of the source/downloaded file")
     write.add_argument("--no-verify", action="store_true", help="skip read-back verification")
-    live = commands.add_parser("linux", help="create persistent Casper/DragonOS or Debian hybrid live media")
+    live = commands.add_parser("linux", help="create hybrid or extracted FAT32 Linux live media, including ARM UEFI")
     live.add_argument("image")
     destination = live.add_mutually_exclusive_group(required=True)
     destination.add_argument("--device", help="USB drive to erase")
     destination.add_argument("--output", help="NEW bootable image file; no root or drive access")
     live.add_argument("--confirm", help="repeat the USB drive path to authorize erasing it")
-    live.add_argument("--persistence-mib", type=int, default=1024, help="ext4 persistence size in MiB (minimum 64)")
+    live.add_argument("--mode", choices=("hybrid", "extract"), default="hybrid")
+    live.add_argument("--architecture", choices=("auto", "x86", "x86_64", "arm64", "arm"), default="auto",
+                      help="extraction only; auto detects the Linux kernel architecture")
+    live.add_argument("--firmware", choices=("bios", "uefi", "both"),
+                      help="extraction only; defaults to UEFI on ARM and BIOS+UEFI on x86-64")
+    live.add_argument("--size-mib", type=int, help="extracted output image size; default fits the live files")
+    live.add_argument("--persistence-mib", type=int,
+                      help="ext4 size in MiB (minimum 64); defaults to 1024 for hybrid, 0 for extraction")
     live.add_argument("--casper-label", choices=("writable", "casper-rw"), default="writable",
                       help="use casper-rw for older Ubuntu/Casper images; Debian is detected automatically")
     live.add_argument("--sha256", default="")
     live.add_argument("--no-verify", action="store_true", help="skip USB read-back verification")
+    from .jetson import MODELS
+    jetson = commands.add_parser("jetson", help="prepare NVIDIA installer USB/legacy SD media or open recovery setup")
+    jetson.add_argument("image", nargs="?")
+    jetson.add_argument("--model", choices=tuple(MODELS), required=True)
+    jetson.add_argument("--storage", choices=("nvme", "sd", "emmc", "usb"), required=True,
+                        help="installation target attached to the Jetson; distinct from the host's installer USB")
+    jetson.add_argument("--method", choices=("installer", "sd", "recovery"), default="installer")
+    jetson.add_argument("--plan", action="store_true", help="show model/storage instructions without writing anything")
+    jetson.add_argument("--launch-sdkmanager", action="store_true", help="open NVIDIA's recovery installation wizard")
+    destination = jetson.add_mutually_exclusive_group()
+    destination.add_argument("--device", help="host's removable installer USB or SD card to erase")
+    destination.add_argument("--output", help="NEW image file, for testing with no physical drive")
+    jetson.add_argument("--confirm", help="repeat the host removable drive path to authorize erasing it")
+    jetson.add_argument("--sha256", default="")
+    jetson.add_argument("--no-verify", action="store_true")
+    commands.add_parser("jetson-devices", help="inspect NVIDIA USB devices and recovery candidates; read-only")
     windows = commands.add_parser("windows", help="create BIOS/UEFI Windows media with FAT32 or NTFS")
     windows.add_argument("image")
     destination = windows.add_mutually_exclusive_group(required=True)
@@ -170,15 +193,47 @@ def main(argv=None):
             print(f"Image SHA-256: {result}")
         elif args.command == "linux":
             from .live import create_live_image
-            size = args.persistence_mib * 1024**2
+            persistence = args.persistence_mib if args.persistence_mib is not None else (1024 if args.mode == "hybrid" else 0)
+            size = persistence * 1024**2
+            if args.mode == "hybrid" and (args.architecture != "auto" or args.firmware or args.size_mib is not None):
+                raise RufusError("Architecture, firmware, and image size options apply to --mode extract.")
             if args.output:
-                result = create_live_image(args.image, args.output, size, args.casper_label,
-                                           expected=args.sha256, cancel=cancel, progress=progress)
+                if args.mode == "extract":
+                    from .linux_iso import create_extracted_image
+                    capacity = args.size_mib * 1024**2 if args.size_mib is not None else None
+                    result = create_extracted_image(args.image, args.output, capacity, size, args.casper_label,
+                                                    args.architecture, args.firmware, args.sha256, cancel, progress)
+                else:
+                    result = create_live_image(args.image, args.output, size, args.casper_label,
+                                               expected=args.sha256, cancel=cancel, progress=progress)
                 print(json.dumps(result, indent=2))
             else:
+                if args.size_mib is not None:
+                    raise RufusError("--size-mib applies to output files; USB media uses the whole drive.")
                 result = live_device(args.image, select_device(args.device, args.confirm), size,
-                                     args.casper_label, args.sha256, not args.no_verify, cancel, progress)
+                                     args.casper_label, args.sha256, not args.no_verify, cancel, progress,
+                                     mode=args.mode, architecture=args.architecture, firmware=args.firmware)
                 print(f"Linux ISO SHA-256: {result}")
+        elif args.command == "jetson-devices":
+            from .jetson import recovery_devices
+            print(json.dumps(recovery_devices(), indent=2))
+        elif args.command == "jetson":
+            from .jetson import installation_plan, launch_sdkmanager, write_media
+            plan = installation_plan(args.model, args.storage, args.method)
+            if args.plan:
+                print(json.dumps(plan, indent=2))
+            elif args.method == "recovery":
+                if args.image or args.device or args.output:
+                    raise RufusError("Recovery flashing uses NVIDIA SDK Manager, without a host disk-image destination.")
+                print(json.dumps(launch_sdkmanager() if args.launch_sdkmanager else plan, indent=2))
+            else:
+                if args.launch_sdkmanager or not args.image or not (args.device or args.output):
+                    raise RufusError("Select a source image and a destination for Jetson media, or use --plan.")
+                device = select_device(args.device, args.confirm) if args.device else None
+                result = write_media(args.image, model=args.model, storage=args.storage, method=args.method,
+                                     output=args.output, device=device, expected=args.sha256,
+                                     verify=not args.no_verify, cancel=cancel, progress=progress)
+                print(json.dumps(result, indent=2))
         elif args.command == "windows":
             filesystem = "vfat" if args.filesystem == "fat32" else "ntfs"
             if args.output:
