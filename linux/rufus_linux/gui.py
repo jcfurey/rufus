@@ -11,7 +11,8 @@ from gi.repository import Gio, GLib, Gtk
 
 from . import __version__
 from .core import RufusError, checksums, expected_sha256, human_size
-from .devices import backup_device, discover_devices, format_device, freedos_device, windows_installer, write_to_device
+from .devices import (backup_device, discover_devices, format_device, freedos_device, live_device,
+                      windows_installer, write_to_device)
 from .windows import WindowsOptions
 
 
@@ -77,7 +78,8 @@ class Window(Gtk.ApplicationWindow):
             "Windows installer — ISO (BIOS / UEFI)",
             "Non-bootable — format drive",
             "Save drive to image — backup",
-            "FreeDOS (BIOS) — bundled DOS boot media"])
+            "FreeDOS (BIOS) — bundled DOS boot media",
+            "Linux live USB — persistent Casper / DragonOS / Debian"])
         self.mode.connect("notify::selected", lambda *_: self.update_controls())
         self.form.append(self.mode)
         self.image_row = Gtk.Box(spacing=8)
@@ -126,6 +128,17 @@ class Window(Gtk.ApplicationWindow):
         self.freedos_box.append(self.freedos_fat)
         self.freedos_box.append(self.freedos_label)
         self.form.append(self.freedos_box)
+
+        self.live_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.live_box.append(self.label("Persistence size (MiB)"))
+        self.persistence = Gtk.SpinButton.new_with_range(64, 16 * 1024 * 1024, 64)
+        self.persistence.set_value(1024)
+        self.persistence.set_numeric(True)
+        self.live_box.append(self.persistence)
+        self.casper_label = Gtk.DropDown.new_from_strings(["Modern Casper / DragonOS (writable)",
+                                                         "Older Casper (casper-rw)"])
+        self.live_box.append(self.casper_label)
+        self.form.append(self.live_box)
 
         self.format_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.format_box.append(self.label("Partition scheme and filesystem"))
@@ -195,13 +208,14 @@ class Window(Gtk.ApplicationWindow):
     def update_controls(self):
         mode = self.mode.get_selected()
         self.image_row.set_visible(mode not in (2, 4))
-        self.hash_box.set_visible(mode in (0, 1))
+        self.hash_box.set_visible(mode in (0, 1, 5))
         self.verify.set_visible(mode != 2)
         self.format_box.set_visible(mode == 2)
         self.windows_box.set_visible(mode == 1)
         self.windows_media.set_visible(mode == 1)
         self.backup_format.set_visible(mode == 3)
         self.freedos_box.set_visible(mode == 4)
+        self.live_box.set_visible(mode == 5)
         self.choose.set_label("Save as…" if mode == 3 else "Select image…")
         selected_path = self.output if mode == 3 else self.image
         self.image_label.set_text(Path(selected_path).name if selected_path else
@@ -213,7 +227,9 @@ class Window(Gtk.ApplicationWindow):
             "Creates GPT + FAT32 media for UEFI PCs. Large install.wim files are split automatically.",
             "Creates one data partition using the selected filesystem.",
             "Opens the USB drive read-only and saves all sectors to a new image file. Existing files are protected.",
-            "Creates BIOS/MBR boot media using Rufus's bundled FreeDOS kernel and shell. Requires mtools.")[mode])
+            "Creates BIOS/MBR boot media using Rufus's bundled FreeDOS kernel and shell. Requires mtools.",
+            "Adds an ext4 persistence partition to a supported hybrid live ISO. Retains its BIOS/UEFI bootloaders. "
+            "Debian persistence is detected automatically. Requires xorriso and e2fsprogs.")[mode])
         if mode == 1:
             fs = "FAT32" if self.win_filesystem.get_selected() == 0 else "NTFS"
             target = "UEFI/GPT" if self.win_firmware.get_selected() == 0 else "BIOS/MBR"
@@ -273,7 +289,7 @@ class Window(Gtk.ApplicationWindow):
             dialog = Gtk.FileDialog(title="Save USB drive to a new image file", initial_name="usb-backup" + suffix)
             dialog.save(self, None, self.output_selected)
             return
-        dialog = Gtk.FileDialog(title="Select a bootable disk image or Windows ISO")
+        dialog = Gtk.FileDialog(title="Select a bootable disk image or installation/live ISO")
         dialog.open(self, None, self.image_selected)
 
     def image_selected(self, dialog, result):
@@ -396,8 +412,11 @@ class Window(Gtk.ApplicationWindow):
             self.work(lambda: backup_device(device, output, image_format, verify, self.cancel, self.report))
             return
         try:
-            if mode in (0, 1):
+            if mode in (0, 1, 5):
                 expected_sha256(self.hash.get_text())
+            if mode == 5:
+                from .live import validate_persistence
+                validate_persistence(self.persistence.get_value_as_int() * 1024**2)
             options = self.windows_options()
             if mode == 1:
                 options.validate()
@@ -411,6 +430,8 @@ class Window(Gtk.ApplicationWindow):
         table, label = ("gpt", "dos")[self.table.get_selected()], self.volume.get_text()
         dos_fat, dos_label = (16, 32)[self.freedos_fat.get_selected()], self.freedos_label.get_text()
         win_fs, win_target = ("vfat", "ntfs")[self.win_filesystem.get_selected()], ("uefi", "bios")[self.win_firmware.get_selected()]
+        persistence = self.persistence.get_value_as_int() * 1024**2
+        casper_label = ("writable", "casper-rw")[self.casper_label.get_selected()]
         dialog = Gtk.Dialog(title="Erase selected USB drive?", transient_for=self, modal=True)
         dialog.set_default_size(470, 220)
         dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
@@ -441,6 +462,9 @@ class Window(Gtk.ApplicationWindow):
                 self.work(lambda: windows_installer(image, device, expected, verify, self.cancel, self.report, options, win_fs, win_target))
             elif mode == 2:
                 self.work(lambda: format_device(device, filesystem, label, table, self.cancel, self.report))
+            elif mode == 5:
+                self.work(lambda: live_device(image, device, persistence, casper_label, expected, verify,
+                                             self.cancel, self.report))
             else:
                 self.work(lambda: freedos_device(device, dos_fat, dos_label, verify=verify,
                                                 cancel=self.cancel, progress=self.report))

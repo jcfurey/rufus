@@ -104,6 +104,43 @@ class DriveSafetyTests(unittest.TestCase):
                     devices.windows_installer(image, usb())
                 service.assert_not_called()
 
+    def test_live_preparation_failure_never_requests_drive_access(self):
+        with patch.object(devices, "guard", return_value=usb()), \
+             patch("rufus_linux.live.create_live_image", side_effect=RufusError("unsupported ISO")), \
+             patch.object(devices, "UDisks") as service, \
+             patch.object(devices, "write_to_device") as write:
+            with self.assertRaisesRegex(RufusError, "unsupported ISO"):
+                devices.live_device("fixture.iso", usb())
+            service.assert_not_called()
+            write.assert_not_called()
+
+    def test_live_media_rechecks_source_drive_after_preparation(self):
+        guards = []
+        def guard(device, source):
+            guards.append(source)
+            if len(guards) == 3:
+                raise RufusError("drive replaced")
+            return device
+        with patch.object(devices, "guard", side_effect=guard), \
+             patch("rufus_linux.live.create_live_image", return_value={"sha256": "0" * 64}), \
+             patch.object(devices, "write_to_device") as write:
+            with self.assertRaisesRegex(RufusError, "drive replaced"):
+                devices.live_device("fixture.iso", usb())
+            self.assertEqual(guards[0], "fixture.iso")
+            self.assertEqual(guards[-1], "fixture.iso")
+            write.assert_not_called()
+
+    def test_live_size_and_sector_validation_never_build_or_open_storage(self):
+        with patch.object(devices, "guard", return_value=usb()), \
+             patch("rufus_linux.live.create_live_image") as build, \
+             patch.object(devices, "UDisks") as service:
+            with self.assertRaisesRegex(RufusError, "at least 64 MiB"):
+                devices.live_device("fixture.iso", usb(), 63 * 1024**2)
+            with self.assertRaisesRegex(RufusError, "512-byte"):
+                devices.live_device("fixture.iso", replace(usb(), logical_sector=4096))
+            build.assert_not_called()
+            service.assert_not_called()
+
     def test_format_parameters_checked_before_storage_access(self):
         for filesystem, label, table in (("vfat", "TOO-LONG-LABEL", "gpt"),
                                          ("vfat", "bad:name", "gpt"),

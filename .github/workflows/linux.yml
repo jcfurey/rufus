@@ -19,7 +19,7 @@ jobs:
       - name: Install native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-gi gir1.2-gtk-4.0 udisks2 dosfstools xorriso xvfb xauth wimtools qemu-utils zstd mtools ntfs-3g 7zip qemu-system-x86 seabios ovmf
+          sudo apt-get install -y python3-gi gir1.2-gtk-4.0 udisks2 dosfstools xorriso xvfb xauth wimtools qemu-utils zstd mtools ntfs-3g 7zip qemu-system-x86 seabios ovmf e2fsprogs fdisk
       - name: Test image writing and drive protection
         run: make -C linux check
       - name: Build standalone application and Ubuntu package

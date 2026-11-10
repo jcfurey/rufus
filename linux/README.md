@@ -12,7 +12,7 @@ any missing packages, including the tools for Windows ISO support:
 
 ```sh
 sudo apt install python3 python3-gi gir1.2-gtk-4.0 udisks2 util-linux \
-    dosfstools xorriso wimtools exfatprogs ntfs-3g e2fsprogs mtools 7zip
+    dosfstools xorriso wimtools exfatprogs ntfs-3g e2fsprogs fdisk mtools 7zip
 make -C linux
 ./linux/dist/rufus-linux
 ```
@@ -32,7 +32,7 @@ To create an Ubuntu package:
 
 ```sh
 make -C linux deb
-sudo apt install ./linux/dist/rufus-linux_0.3.0_all.deb
+sudo apt install ./linux/dist/rufus-linux_0.4.0_all.deb
 ```
 
 Alternatively, install the application and desktop launcher for your user:
@@ -64,6 +64,10 @@ Your desktop session must have `$HOME/.local/bin` on `PATH` for that launcher.
   when targeting UEFI. Windows BIOS boot code is reused from upstream Rufus.
 - Bootable FreeDOS FAT16/FAT32 media using Rufus's bundled kernel, command shell,
   locale utilities, and MBR/boot sectors. No FreeDOS download is required.
+- Persistent Linux live media for supported Casper (including DragonOS) and
+  Debian hybrid ISOs. Adds an ext4 partition and live boot options while
+  retaining the ISO's bootloaders, volume identity, and firmware support.
+  Available in the desktop's Linux live USB mode and the `linux` CLI command.
 - Windows setup options in the desktop and CLI: TPM/Secure Boot/RAM check bypass,
   offline/local account setup, privacy choices, explicit Windows locale/time zone,
   and automatic device-encryption control. WinPE options are injected into the
@@ -76,8 +80,8 @@ Your desktop session must have `$HOME/.local/bin` on `PATH` for that launcher.
 - A standalone executable archive, a desktop launcher, and Debian packaging.
 
 This is an initial port, **not full parity with Windows Rufus**. Windows To Go,
-remaining advanced Windows setup options, persistence
-partition creation, ISO downloads, Secure Boot revocation checks,
+remaining advanced Windows setup options, general Linux ISO extraction to FAT32,
+ISO downloads, Secure Boot revocation checks,
 VHDX/FFU/VTSI support, translations, and destructive bad-block testing are not
 implemented. DD mode preserves whatever boot support is already in an image.
 UEFI Windows media retains the bootloader supplied by the selected ISO; the
@@ -109,6 +113,8 @@ The detailed implementation and validation checklist is in [PARITY.md](PARITY.md
 ./rufus-linux freedos --output /tmp/freedos.img --fat 32 --size-mib 64
 ./rufus-linux windows /path/to/windows.iso --output /tmp/windows.img \
     --filesystem ntfs --firmware uefi --local-account alice --privacy
+./rufus-linux linux /path/to/DragonOS_Resolute_R2.2.iso \
+    --output /tmp/dragonos-persistent.img --persistence-mib 4096
 
 # DESTRUCTIVE: /dev/sdX must be replaced with a drive from `devices`.
 ./rufus-linux write /path/to/hybrid-linux.iso --device /dev/sdX --confirm /dev/sdX
@@ -118,11 +124,13 @@ The detailed implementation and validation checklist is in [PARITY.md](PARITY.md
 ./rufus-linux windows /path/to/windows.iso --device /dev/sdX --confirm /dev/sdX \
     --filesystem ntfs --firmware bios
 ./rufus-linux freedos --device /dev/sdX --confirm /dev/sdX --fat 32
+./rufus-linux linux /path/to/live.iso --device /dev/sdX --confirm /dev/sdX \
+    --persistence-mib 4096
 ./rufus-linux format --device /dev/sdX --confirm /dev/sdX \
     --filesystem exfat --table gpt --label STORAGE
 ```
 
-Use `--sha256 HEX` with `write` or `windows` to check a published checksum before
+Use `--sha256 HEX` with `write`, `windows`, or `linux` to check a published checksum before
 erasing anything. For compressed images, the expected SHA-256 is for the
 **downloaded compressed file**; the completion message identifies the
 decompressed image checksum. Verification is enabled by default. Press Ctrl+C
@@ -136,6 +144,34 @@ first-login command requesting a password change. The options do not contain
 installer disk-selection or automatic partition-erasure instructions. Offline
 account and hardware-check workarounds follow this branch's upstream Rufus
 implementation; their effectiveness depends on the Windows build being installed.
+
+## Linux live persistence
+
+Select **Linux live USB** in the desktop, choose a hybrid live ISO, and set the
+persistence size in MiB (minimum 64, default 1024). The drive must fit both the
+ISO and the persistence volume. Casper images use the `persistent` boot option
+and the `writable` filesystem label. Select **Older Casper (casper-rw)** or pass
+`--casper-label casper-rw` for images that require the older label. Debian's
+`boot=live` configuration is detected automatically; it gets the `persistence`
+boot option, a volume labeled `persistence`, and `/ union` in `persistence.conf`.
+See the [Casper manual](https://manpages.ubuntu.com/manpages/noble/man7/casper.7.html)
+and [Debian persistence documentation](https://live-team.pages.debian.net/live-manual/html/live-manual/customizing-run-time-behaviours.en.html).
+
+This mode rebuilds the ISO with xorriso's boot-equipment replay and appends an
+ext4 volume. Its live files remain on ISO9660; it does not extract them to a
+writable FAT32 partition. It supports conventional external GRUB/Syslinux `.cfg`
+files using `boot=casper` or `boot=live`. Rescue entries explicitly disabling
+persistence and media-check entries are preserved. Standard root MD5/SHA-256
+manifests are updated for changed configuration files and replay-patched boot
+images. Unsupported layouts,
+mixed live systems, custom persistence-store options, and existing persistence
+volumes are refused. Retained bootloaders do not establish Secure Boot support.
+
+The prepared image is verified before the USB writer requests access. On GPT
+drives, the backup partition table is relocated to the drive's end; unused space
+after the requested persistence volume remains unallocated. Creating a large
+full-drive image still requires reading its complete logical size for checksum
+verification. File-backed output uses the space needed by the rebuilt image.
 
 ## Storage behavior
 
@@ -174,6 +210,10 @@ make -C linux smoke-test  # briefly opens and closes the GTK application
 make -C linux gui-test    # GTK interaction and background checksum test; no drives opened
 make -C linux boot-test   # optional QEMU/SeaBIOS FreeDOS boot tests, no root
 make -C linux uefi-test   # optional QEMU/OVMF FAT32 and UEFI:NTFS boot tests, no root
+# Optional real Casper ISO: two boots per firmware, private VM overlays, no root.
+# LIVE_OUTPUT must be a NEW directory. No ISO is downloaded by the test.
+make -C linux live-test LIVE_ISO=/path/to/DragonOS_Resolute_R2.2.iso \
+    LIVE_OUTPUT=build/dragonos-reboot-test
 sudo make -C linux integration # optional: one authorization for a disposable-loop test matrix
 ```
 
@@ -242,3 +282,29 @@ The generated Windows image, validation metadata, and screenshot are retained
 under ignored `linux/build/real-media/`. Original ISOs in Downloads were read
 without modification. DragonOS was identified as a Casper-based live image;
 persistence implementation and boot testing remain on the parity checklist.
+
+### Version 0.4 validation
+
+- All 108 automated tests passed with the local validation toolset. New tests
+  cover actual hybrid ISO rebuilding, ext4 integrity, Casper and Debian layouts,
+  legacy Casper labels, updated configuration and boot-image checksums, ISO UUID preservation,
+  GPT relocation, cancellation, source changes, protected output, and preparation
+  failures before device access. The GTK interaction test also passed.
+- `DragonOS_Resolute_R2.2.iso` (SHA-256
+  `59898fa7f2faec1fa951fa401c462d921f886f2a21561bfecc4b759269d0d5ec`)
+  was prepared with a 512 MiB `writable` ext4 partition. In private VM overlays,
+  its actual Casper initramfs mounted that partition as `/cow` and the live root
+  as an overlay filesystem. A marker written through the live root was read
+  back on a second boot.
+- This write/reboot/read test passed through both the retained BIOS/GRUB loader
+  under SeaBIOS and the retained UEFI loader under OVMF. Test copies included an
+  initramfs hook, serial output, and a zero-second GRUB timeout. A separate direct
+  kernel boot also passed twice. Source ISOs and the prepared user image were
+  used read-only; VM changes were confined to private overlays.
+- All 591 entries in the prepared DragonOS image's MD5 manifest were verified
+  independently after extraction, including the rewritten GRUB configuration
+  and patched BIOS boot image. The source manifest's stale self entry is removed.
+- The prepared image, build metadata, VM overlays, and boot logs are retained
+  under ignored `linux/build/real-media/dragonos-*`. Debian has file-backed
+  partition/configuration tests; a real Debian live reboot remains unvalidated.
+  Secure Boot and physical USB hardware remain separate acceptance work.

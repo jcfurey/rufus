@@ -42,6 +42,15 @@ def main():
                 assert window.freedos_box.get_visible()
                 assert not window.image_row.get_visible()
                 assert window.start.get_label() == "Start"
+                window.mode.set_selected(5)
+                assert window.live_box.get_visible()
+                assert window.hash_box.get_visible()
+                assert window.image_row.get_visible()
+                assert not window.windows_box.get_visible()
+                assert window.persistence.get_value_as_int() == 1024
+                assert "persistence" in window.mode_note.get_text()
+                window.persistence.set_value(512)
+                window.casper_label.set_selected(1)
                 window.mode.set_selected(1)
                 assert window.windows_box.get_visible()
                 assert window.windows_media.get_visible()

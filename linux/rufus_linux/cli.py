@@ -10,7 +10,7 @@ import time
 
 from . import __version__
 from .core import Cancelled, HASH_ALGORITHMS, RufusError, checksums, human_size, write_to_file
-from .devices import (backup_device, discover_devices, format_device, freedos_device, windows_installer,
+from .devices import (backup_device, discover_devices, format_device, freedos_device, live_device, windows_installer,
                       write_to_device)
 from .windows import WindowsOptions, answer_file, prepare_windows
 
@@ -53,6 +53,17 @@ def parser():
     write.add_argument("--confirm", help="repeat the exact device path to authorize erasing it")
     write.add_argument("--sha256", default="", help="expected SHA-256 of the source/downloaded file")
     write.add_argument("--no-verify", action="store_true", help="skip read-back verification")
+    live = commands.add_parser("linux", help="create persistent Casper/DragonOS or Debian hybrid live media")
+    live.add_argument("image")
+    destination = live.add_mutually_exclusive_group(required=True)
+    destination.add_argument("--device", help="USB drive to erase")
+    destination.add_argument("--output", help="NEW bootable image file; no root or drive access")
+    live.add_argument("--confirm", help="repeat the USB drive path to authorize erasing it")
+    live.add_argument("--persistence-mib", type=int, default=1024, help="ext4 persistence size in MiB (minimum 64)")
+    live.add_argument("--casper-label", choices=("writable", "casper-rw"), default="writable",
+                      help="use casper-rw for older Ubuntu/Casper images; Debian is detected automatically")
+    live.add_argument("--sha256", default="")
+    live.add_argument("--no-verify", action="store_true", help="skip USB read-back verification")
     windows = commands.add_parser("windows", help="create BIOS/UEFI Windows media with FAT32 or NTFS")
     windows.add_argument("image")
     destination = windows.add_mutually_exclusive_group(required=True)
@@ -157,6 +168,17 @@ def main(argv=None):
                 result = write_to_device(args.image, device, args.sha256,
                                          not args.no_verify, cancel, progress)
             print(f"Image SHA-256: {result}")
+        elif args.command == "linux":
+            from .live import create_live_image
+            size = args.persistence_mib * 1024**2
+            if args.output:
+                result = create_live_image(args.image, args.output, size, args.casper_label,
+                                           expected=args.sha256, cancel=cancel, progress=progress)
+                print(json.dumps(result, indent=2))
+            else:
+                result = live_device(args.image, select_device(args.device, args.confirm), size,
+                                     args.casper_label, args.sha256, not args.no_verify, cancel, progress)
+                print(f"Linux ISO SHA-256: {result}")
         elif args.command == "windows":
             filesystem = "vfat" if args.filesystem == "fat32" else "ntfs"
             if args.output:

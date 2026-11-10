@@ -19,7 +19,8 @@ class CliTests(unittest.TestCase):
     def test_no_device_can_be_erased_without_exact_confirmation(self):
         with patch("rufus_linux.cli.discover_devices") as discover, \
              contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(main(["write", "image.img", "--device", "/dev/sdz"]), 1)
+            for command in ("write", "linux"):
+                self.assertEqual(main([command, "image.img", "--device", "/dev/sdz"]), 1)
             discover.assert_not_called()
 
     def test_write_file_end_to_end(self):

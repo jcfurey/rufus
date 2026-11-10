@@ -307,6 +307,24 @@ def windows_installer(source, device, expected="", verify=True, cancel=None, pro
     return result["source_sha256"]
 
 
+def live_device(source, device, persistence_size=1024 * 1024**2, casper_label="writable",
+                expected="", verify=True, cancel=None, progress=None):
+    from .live import create_live_image, validate_persistence
+
+    validate_persistence(persistence_size, casper_label)
+    guard(device, source)
+    if device.logical_sector != 512:
+        raise RufusError("Persistent live media currently requires 512-byte logical sectors.")
+    with tempfile.TemporaryDirectory(prefix="rufus-live-drive-") as directory:
+        guard(device, directory)
+        image = Path(directory) / "live.img"
+        result = create_live_image(source, image, persistence_size, casper_label, device.size,
+                                   expected, cancel, progress)
+        guard(device, source)
+        write_to_device(image, device, result["sha256"], verify, cancel, progress)
+    return result["source_sha256"]
+
+
 def backup_device(device, output, image_format="raw", verify=True, cancel=None, progress=None):
     from .backup import save_image
 

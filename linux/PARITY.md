@@ -32,7 +32,7 @@ are present. File-backed tests alone do not establish bootability.
 | FreeDOS | Implemented, desktop/CLI; SeaBIOS boots FAT16 and FAT32 through COMMAND.COM | Physical hardware and regional keyboard configuration |
 | MS-DOS | Pending | Supported source extraction and boot tests |
 | Syslinux/GRUB ISO extraction mode | Pending | Version matching, config rewriting and boot fixtures |
-| Linux persistence | Pending | Distro-specific partition/config creation and reboot tests |
+| Linux persistence | Implemented for Casper/DragonOS and Debian hybrid ISOs, desktop and CLI; real DragonOS write/reboot/read passes under BIOS and UEFI | Real Debian and additional distro reboots; Secure Boot and physical USB validation |
 | Windows ISO and UEFI Shell download | Pending | Official-source catalog, cancellation, integrity and caching |
 | UEFI runtime media validation | Pending | Validation loader integration and firmware tests |
 | Secure Boot DBX/SBAT checks | Pending | PE hashing, signature/catalog parsing, revocation data and fixtures |
@@ -62,3 +62,11 @@ Windows and FreeDOS now prepare disk images without elevated access and enter
 the common disk writer only after successful construction. Actual Windows 11
 Setup boot was validated with a private VM overlay, without altering the source
 ISO or a physical drive. Full installation/OOBE validation remains outstanding.
+
+Linux persistence uses hybrid ISO remastering with the source boot equipment
+retained. Casper/DragonOS uses ext4 labeled `writable` (or `casper-rw` for older
+images); Debian uses `persistence` with `/ union` in `persistence.conf`. All
+preparation completes before entering the common disk writer. DragonOS's actual
+Casper root overlay passed marker-file write/reboot/read tests through BIOS and
+UEFI in private VM overlays. Native extraction to FAT32 with independently
+installed Syslinux/GRUB remains pending; persistence does not depend on it.

@@ -1,11 +1,13 @@
 PYTHON ?= /usr/bin/python3
 PREFIX ?= /usr/local
 DESTDIR ?=
-VERSION = 0.3.0
+VERSION = 0.4.0
+LIVE_ISO ?=
+LIVE_OUTPUT ?= build/live-reboot-test
 SOURCES = $(wildcard rufus_linux/*.py)
 RESOURCES = $(wildcard ../res/freedos/* ../src/ms-sys/inc/*.h) ../res/uefi/uefi-ntfs.img
 
-.PHONY: all check smoke-test gui-test boot-test uefi-test integration install uninstall clean deb
+.PHONY: all check smoke-test gui-test boot-test uefi-test live-test integration install uninstall clean deb
 all: dist/rufus-linux
 
 dist/rufus-linux: $(SOURCES) $(RESOURCES) build_assets.py Makefile ../LICENSE.txt
@@ -32,6 +34,9 @@ boot-test:
 
 uefi-test:
 	$(PYTHON) tests/uefi_smoke.py
+
+live-test:
+	$(PYTHON) tests/live_smoke.py "$(LIVE_ISO)" --output-dir "$(LIVE_OUTPUT)" --firmware all
 
 integration:
 	$(PYTHON) tests/udisks_integration.py
