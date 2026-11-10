@@ -1,14 +1,17 @@
 PYTHON ?= /usr/bin/python3
 PREFIX ?= /usr/local
 DESTDIR ?=
-VERSION = 0.6.0
+VERSION = 0.7.0
 LIVE_ISO ?=
 LIVE_OUTPUT ?= build/live-reboot-test
 LIVE_LAYOUT ?= hybrid
+LIVE_BOOTLOADER ?= auto
+SYSLINUX_KERNEL ?=
+SYSLINUX_OUTPUT ?= build/syslinux-boot-test
 SOURCES = $(wildcard rufus_linux/*.py)
 RESOURCES = $(wildcard ../res/freedos/* ../src/ms-sys/inc/*.h) ../res/uefi/uefi-ntfs.img
 
-.PHONY: all check smoke-test gui-test boot-test uefi-test live-test integration install uninstall clean deb
+.PHONY: all check smoke-test gui-test boot-test uefi-test live-test syslinux-test integration install uninstall clean deb
 all: dist/rufus-linux
 
 dist/rufus-linux: $(SOURCES) $(RESOURCES) build_assets.py Makefile ../LICENSE.txt
@@ -37,7 +40,10 @@ uefi-test:
 	$(PYTHON) tests/uefi_smoke.py
 
 live-test:
-	$(PYTHON) tests/live_smoke.py "$(LIVE_ISO)" --output-dir "$(LIVE_OUTPUT)" --firmware all --layout "$(LIVE_LAYOUT)"
+	$(PYTHON) tests/live_smoke.py "$(LIVE_ISO)" --output-dir "$(LIVE_OUTPUT)" --firmware all --layout "$(LIVE_LAYOUT)" --bootloader "$(LIVE_BOOTLOADER)"
+
+syslinux-test:
+	$(PYTHON) tests/syslinux_smoke.py --kernel "$(SYSLINUX_KERNEL)" --output-dir "$(SYSLINUX_OUTPUT)"
 
 integration:
 	$(PYTHON) tests/udisks_integration.py

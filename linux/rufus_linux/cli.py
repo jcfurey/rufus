@@ -63,6 +63,8 @@ def parser():
     live.add_argument("--mode", choices=("hybrid", "extract"), default="hybrid")
     live.add_argument("--architecture", choices=("auto", "x86", "x86_64", "arm64", "arm"), default="auto",
                       help="extraction only; auto detects the Linux kernel architecture")
+    live.add_argument("--bootloader", choices=("auto", "grub", "syslinux"), default="auto",
+                      help="extraction only; BIOS loader (auto follows the source menu); UEFI uses GRUB")
     live.add_argument("--firmware", choices=("bios", "uefi", "both"),
                       help="extraction only; defaults to UEFI on ARM and BIOS+UEFI on x86-64")
     live.add_argument("--size-mib", type=int, help="extracted output image size; default fits the live files")
@@ -212,14 +214,15 @@ def main(argv=None):
             from .live import create_live_image
             persistence = args.persistence_mib if args.persistence_mib is not None else (1024 if args.mode == "hybrid" else 0)
             size = persistence * 1024**2
-            if args.mode == "hybrid" and (args.architecture != "auto" or args.firmware or args.size_mib is not None):
-                raise RufusError("Architecture, firmware, and image size options apply to --mode extract.")
+            if args.mode == "hybrid" and (args.architecture != "auto" or args.bootloader != "auto" or args.firmware or args.size_mib is not None):
+                raise RufusError("Architecture, bootloader, firmware, and image size options apply to --mode extract.")
             if args.output:
                 if args.mode == "extract":
                     from .linux_iso import create_extracted_image
                     capacity = args.size_mib * 1024**2 if args.size_mib is not None else None
                     result = create_extracted_image(args.image, args.output, capacity, size, args.casper_label,
-                                                    args.architecture, args.firmware, args.sha256, cancel, progress)
+                                                    args.architecture, args.firmware, args.sha256, cancel, progress,
+                                                    bootloader=args.bootloader)
                 else:
                     result = create_live_image(args.image, args.output, size, args.casper_label,
                                                expected=args.sha256, cancel=cancel, progress=progress)
@@ -229,7 +232,8 @@ def main(argv=None):
                     raise RufusError("--size-mib applies to output files; USB media uses the whole drive.")
                 result = live_device(args.image, select_device(args.device, args.confirm), size,
                                      args.casper_label, args.sha256, not args.no_verify, cancel, progress,
-                                     mode=args.mode, architecture=args.architecture, firmware=args.firmware)
+                                     mode=args.mode, architecture=args.architecture, firmware=args.firmware,
+                                     bootloader=args.bootloader)
                 print(f"Linux ISO SHA-256: {result}")
         elif args.command == "jetson-devices":
             from .jetson import recovery_devices

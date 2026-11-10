@@ -316,14 +316,15 @@ def windows_installer(source, device, expected="", verify=True, cancel=None, pro
 
 
 def live_device(source, device, persistence_size=1024 * 1024**2, casper_label="writable",
-                expected="", verify=True, cancel=None, progress=None, *, mode="hybrid", architecture="auto", firmware=None):
+                expected="", verify=True, cancel=None, progress=None, *, mode="hybrid", architecture="auto", firmware=None,
+                bootloader="auto"):
     from .live import create_live_image, validate_persistence
 
     if mode not in ("hybrid", "extract"):
         raise RufusError("Select hybrid or FAT32 extraction mode for Linux media.")
     if mode == "hybrid" or persistence_size:
         validate_persistence(persistence_size, casper_label)
-    if mode == "hybrid" and (architecture != "auto" or firmware is not None):
+    if mode == "hybrid" and (architecture != "auto" or firmware is not None or bootloader != "auto"):
         raise RufusError("Hybrid mode retains the ISO's architecture and firmware support.")
     guard(device, source)
     if device.logical_sector != 512:
@@ -334,7 +335,7 @@ def live_device(source, device, persistence_size=1024 * 1024**2, casper_label="w
         if mode == "extract":
             from .linux_iso import create_extracted_image
             result = create_extracted_image(source, image, device.size, persistence_size, casper_label,
-                                            architecture, firmware, expected, cancel, progress)
+                                            architecture, firmware, expected, cancel, progress, bootloader=bootloader)
         else:
             result = create_live_image(source, image, persistence_size, casper_label, device.size,
                                        expected, cancel, progress)

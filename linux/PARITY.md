@@ -32,7 +32,7 @@ are present. File-backed tests alone do not establish bootability.
 | FreeDOS | Implemented, desktop/CLI; SeaBIOS boots FAT16 and FAT32 through COMMAND.COM | Physical hardware and regional keyboard configuration |
 | MS-DOS | Pending | Supported source extraction and boot tests |
 | GRUB ISO extraction mode | Implemented FAT32 for conventional Casper/Debian menus; x86 BIOS/UEFI, ARM64 UEFI, ARM32 UEFI, optional persistence | Additional distributions, full ARM live-root persistence, Secure Boot and physical devices |
-| Syslinux ISO extraction mode | Pending | Version matching, config rewriting and boot fixtures |
+| Syslinux ISO extraction mode | Implemented for conventional Casper/Debian live entries; native Syslinux BIOS and GRUB UEFI; real kernel boots and DragonOS persistence reboots pass | Additional Syslinux-source distributions, dynamic/utility menus and Syslinux variants |
 | Linux persistence | Implemented for Casper/DragonOS and Debian hybrid ISOs, desktop and CLI; real DragonOS write/reboot/read passes under BIOS and UEFI | Real Debian and additional distro reboots; Secure Boot and physical USB validation |
 | Windows ISO and UEFI Shell download | Pending | Official-source catalog, cancellation, integrity and caching |
 | UEFI runtime media validation | Pending | Validation loader integration and firmware tests |
@@ -72,7 +72,12 @@ Casper root overlay passed marker-file write/reboot/read tests through BIOS and
 UEFI in private VM overlays. Native FAT32 extraction now installs matching GRUB
 loaders/modules and passes DragonOS persistence reboots under BIOS and UEFI.
 ARM64 and ARM32 UEFI USB images also boot real Linux kernels in QEMU. Syslinux
-extraction remains pending.
+extraction now rebuilds conventional Casper/Debian menus with a coherent native
+Syslinux BIOS loader set. SeaBIOS/Syslinux and OVMF/GRUB both boot real Linux
+kernels from one generated FAT32 USB image, including multiple initrds.
+Actual DragonOS GRUB menus converted to native Syslinux BIOS media also passed
+Casper marker-file write/reboot/read tests under both BIOS and UEFI. These VM
+checks do not replace physical USB/firmware validation.
 
 ## Additional requested platforms
 

@@ -139,7 +139,7 @@ class Window(Gtk.ApplicationWindow):
 
         self.live_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.live_layout = Gtk.DropDown.new_from_strings(["ISO layout — preserve original bootloaders",
-                                                         "FAT32 files — install matching GRUB"])
+                                                         "FAT32 files — GRUB / Syslinux"])
         self.live_box.append(self.live_layout)
         self.live_target = Gtk.Box(spacing=8)
         self.live_arch = Gtk.DropDown.new_from_strings(["Detect kernel architecture", "x86-64", "ARM64 / AArch64",
@@ -148,6 +148,9 @@ class Window(Gtk.ApplicationWindow):
         self.live_target.append(self.live_arch)
         self.live_target.append(self.live_firmware)
         self.live_box.append(self.live_target)
+        self.live_bootloader = Gtk.DropDown.new_from_strings(["BIOS loader: follow ISO menu (UEFI uses GRUB)",
+                                                             "BIOS loader: GRUB", "BIOS loader: Syslinux 6.x"])
+        self.live_box.append(self.live_bootloader)
         self.live_persist = Gtk.CheckButton(label="Keep changes between boots (persistence)", active=True)
         self.live_box.append(self.live_persist)
         self.live_box.append(self.label("Persistence size (MiB)"))
@@ -291,6 +294,7 @@ class Window(Gtk.ApplicationWindow):
         self.jetson_box.set_visible(mode == 6)
         extracted = self.live_layout.get_selected() == 1
         self.live_target.set_visible(extracted)
+        self.live_bootloader.set_visible(extracted)
         self.live_persist.set_sensitive(extracted)
         if not extracted:
             self.live_persist.set_active(True)
@@ -317,8 +321,9 @@ class Window(Gtk.ApplicationWindow):
             target = "UEFI/GPT" if self.win_firmware.get_selected() == 0 else "BIOS/MBR"
             self.mode_note.set_text(f"Prepares {target} Windows media using {fs}, then writes and verifies the image.")
         if mode == 5 and extracted:
-            self.mode_note.set_text("Creates FAT32 live media with GRUB built for the detected x86 or ARM kernel. "
-                                    "ARM uses UEFI. The generated UEFI loader requires Secure Boot to be disabled. "
+            self.mode_note.set_text("Creates FAT32 Casper/Debian live media from GRUB or Syslinux menus. "
+                                    "BIOS uses the selected GRUB/Syslinux loader; ARM and UEFI use GRUB. "
+                                    "The generated UEFI loader requires Secure Boot to be disabled. "
                                     "Use disk-image mode for board-specific Raspberry Pi images.")
         jetson_valid = True
         if mode == 6:
@@ -671,6 +676,7 @@ class Window(Gtk.ApplicationWindow):
         live_mode = ("hybrid", "extract")[self.live_layout.get_selected()]
         live_arch = ("auto", "x86_64", "arm64", "arm", "x86")[self.live_arch.get_selected()]
         live_firmware = (None, "both", "uefi", "bios")[self.live_firmware.get_selected()]
+        live_bootloader = ("auto", "grub", "syslinux")[self.live_bootloader.get_selected()]
         jetson_model, jetson_storage, jetson_method = self.jetson_selection()
         dialog = Gtk.Dialog(title="Erase selected USB drive?", transient_for=self, modal=True)
         dialog.set_default_size(470, 220)
@@ -706,7 +712,8 @@ class Window(Gtk.ApplicationWindow):
                 self.work(lambda: live_device(image, device, persistence, casper_label, expected, verify,
                                              self.cancel, self.report, mode=live_mode,
                                              architecture=live_arch if live_mode == "extract" else "auto",
-                                             firmware=live_firmware if live_mode == "extract" else None))
+                                             firmware=live_firmware if live_mode == "extract" else None,
+                                             bootloader=live_bootloader if live_mode == "extract" else "auto"))
             elif mode == 6:
                 from .jetson import write_media
                 self.work(lambda: write_media(image, model=jetson_model, storage=jetson_storage,

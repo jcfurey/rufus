@@ -32,7 +32,7 @@ To create an Ubuntu package:
 
 ```sh
 make -C linux deb
-sudo apt install ./linux/dist/rufus-linux_0.6.0_all.deb
+sudo apt install ./linux/dist/rufus-linux_0.7.0_all.deb
 ```
 
 Alternatively, install the application and desktop launcher for your user:
@@ -71,6 +71,10 @@ Your desktop session must have `$HOME/.local/bin` on `PATH` for that launcher.
 - FAT32 extraction for conventional GRUB Casper/Debian live ISOs: x86 BIOS,
   x86-64 BIOS/UEFI, ARM64 UEFI, and 32-bit ARM UEFI, with optional persistence.
   Detects kernel architecture and installs matching GRUB loaders and modules.
+- Syslinux/ISOLINUX Casper/Debian menu extraction with nested includes, default
+  selection, multiple initrds, and persistence. Native Syslinux 6.x handles
+  x86 BIOS; matching GRUB handles UEFI and ARM. Rebuilds a simple live menu
+  without reusing the ISO's potentially incompatible COM32 modules.
 - NVIDIA Jetson installer USB preparation, legacy developer-kit SD-image
   writing, model/storage instructions, recovery USB inspection, and direct
   NVIDIA BSP recovery jobs with command review, authorization, cancellation,
@@ -186,10 +190,13 @@ verification. File-backed output uses the space needed by the rebuilt image.
 
 ## Extracted media, ARM boards, and NVIDIA Jetson
 
-In **Linux live USB**, choose **FAT32 files** to extract a supported GRUB
-Casper/Debian ISO. Kernel headers select x86 BIOS, x86-64 BIOS/UEFI, ARM64 UEFI,
+In **Linux live USB**, choose **FAT32 files** to extract supported GRUB or
+Syslinux/ISOLINUX Casper/Debian live menus. Kernel headers select x86 BIOS, x86-64 BIOS/UEFI, ARM64 UEFI,
 or ARM32 UEFI. Install `grub-common` and the target's GRUB data package:
 `grub-pc-bin`, `grub-efi-amd64-bin`, `grub-efi-arm64-bin`, or `grub-efi-arm-bin`.
+For Syslinux BIOS output, install a native `syslinux` 6.x mtools installer;
+GRUB is needed only for the firmware paths that use it. BIOS loader selection
+is available in the desktop and CLI `--bootloader auto|grub|syslinux`.
 The generated UEFI loaders are unsigned and require Secure Boot to be disabled.
 CLI extraction defaults to no persistence; add `--persistence-mib` to enable it.
 The application uses native Python/GI on x86 or ARM Linux hosts.
@@ -381,3 +388,24 @@ persistence implementation and boot testing remain on the parity checklist.
 - NVIDIA's actual R39.2.1 BSP was inspected and planned read-only. Its Intel
   host tools were recognized, and missing rootfs/dependencies/USB selection
   correctly blocked execution. No vendor script or physical flash was run.
+
+### Version 0.7 validation
+
+- All 167 automated tests passed with the local development toolset.
+- Syslinux tests cover nested relative includes, include cycles/escapes, default
+  selection, global/local APPEND handling, multiple initrds, persistence,
+  protected outputs, native installer/loader consistency, complete manifests,
+  explicit ARM/BIOS rejection, automatic ARM-to-GRUB selection, and CLI operation
+  without drive discovery. Existing GRUB/Jetson functionality remains covered.
+- A real x86-64 Linux kernel and static BusyBox booted from the same FAT32 USB
+  image through SeaBIOS/Syslinux and OVMF/GRUB in QEMU. Each guest verified both
+  initrd archives and powered off. Artifacts are retained under
+  `linux/build/real-media/syslinux-boot-test`.
+- Actual DragonOS GRUB menus were converted to native Syslinux BIOS media with
+  256 MiB persistence. Real Casper marker-file write/reboot/read tests passed
+  under both BIOS/Syslinux and UEFI/GRUB in private VM overlays. Artifacts are
+  retained under `linux/build/real-media/dragonos-syslinux-persistence`.
+- ARM64 and ARM32 UEFI images again booted real kernels with the updated
+  extractor. Full ARM live-distribution persistence remains acceptance work.
+- GTK checks cover the new loader selection. The amd64 CI job includes the
+  reproducible two-firmware kernel test; remote execution remains pending.

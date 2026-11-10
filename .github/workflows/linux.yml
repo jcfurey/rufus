@@ -28,9 +28,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y python3-gi gir1.2-gtk-4.0 udisks2 dosfstools xorriso xvfb xauth wimtools qemu-utils zstd mtools ntfs-3g 7zip qemu-system-x86 seabios ovmf e2fsprogs fdisk
-      - name: Install matching x86 GRUB data
+      - name: Install x86 bootloaders and kernel-test dependencies
         if: matrix.platform == 'amd64'
-        run: sudo apt-get install -y grub-common grub-pc-bin grub-efi-amd64-bin
+        run: sudo apt-get install -y grub-common grub-pc-bin grub-efi-amd64-bin syslinux busybox-static linux-image-generic
       - name: Install native ARM GRUB and boot-test dependencies
         if: matrix.platform == 'arm64'
         run: sudo apt-get install -y grub-common grub-efi-arm64-bin qemu-system-arm qemu-efi-aarch64 busybox-static linux-image-generic
@@ -41,6 +41,12 @@ jobs:
       - name: Boot generated BIOS and UEFI media without root
         if: matrix.platform == 'amd64'
         run: make -C linux boot-test uefi-test
+      - name: Boot a real Linux kernel through Syslinux BIOS and GRUB UEFI USB media
+        if: matrix.platform == 'amd64'
+        run: |
+          SYSLINUX_TEST_KERNEL=$(find /boot -maxdepth 1 -name 'vmlinuz-*' -type f | sort -V | tail -n 1)
+          sudo install -m644 "$SYSLINUX_TEST_KERNEL" linux/build/syslinux-test-kernel
+          make -C linux syslinux-test SYSLINUX_KERNEL=build/syslinux-test-kernel
       - name: Boot ARM64 UEFI media and a real Linux kernel without root
         if: matrix.platform == 'arm64'
         run: |

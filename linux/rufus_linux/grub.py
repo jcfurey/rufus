@@ -32,7 +32,9 @@ def module_directory(target):
     raise RufusError(f"{target} GRUB modules are missing. Install {package}, or use hybrid mode.")
 
 
-def target_modules(architecture, firmware):
+def target_modules(architecture, firmware, *, bios="grub"):
+    if bios not in ("grub", "syslinux"):
+        raise RufusError("Select GRUB or Syslinux for BIOS extraction.")
     if architecture not in ("x86", "x86_64", "arm64", "arm"):
         raise RufusError("Unsupported Linux kernel architecture.")
     firmware = firmware or ("uefi" if architecture in ("arm64", "arm") else "bios" if architecture == "x86" else "both")
@@ -43,7 +45,7 @@ def target_modules(architecture, firmware):
     if architecture == "x86" and firmware != "bios":
         raise RufusError("32-bit x86 Linux extraction currently supports BIOS firmware.")
     targets = {}
-    if firmware in ("bios", "both"):
+    if firmware in ("bios", "both") and bios == "grub":
         targets["i386-pc"] = module_directory("i386-pc")
     if firmware in ("uefi", "both"):
         target, _ = EFI[architecture]

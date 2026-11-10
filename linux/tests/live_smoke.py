@@ -72,7 +72,10 @@ def main():
     parser.add_argument("--timeout", type=int, default=240, help="seconds per boot")
     parser.add_argument("--firmware", choices=("direct", "bios", "uefi", "all"), default="direct")
     parser.add_argument("--layout", choices=("hybrid", "extract"), default="hybrid")
+    parser.add_argument("--bootloader", choices=("auto", "grub", "syslinux"), default="auto")
     args = parser.parse_args()
+    if args.layout != "extract" and args.bootloader != "auto":
+        parser.error("--bootloader requires --layout extract")
     qemu, qemu_img = shutil.which("qemu-system-x86_64"), shutil.which("qemu-img")
     if not qemu or not qemu_img:
         raise RuntimeError("Install qemu-system-x86 and qemu-utils for the live reboot test.")
@@ -83,7 +86,7 @@ def main():
     if not args.prepared:
         if args.layout == "extract":
             from rufus_linux.linux_iso import create_extracted_image
-            create_extracted_image(args.iso, prepared, persistence_size=256 * live.MIB)
+            create_extracted_image(args.iso, prepared, persistence_size=256 * live.MIB, bootloader=args.bootloader)
         else:
             live.create_live_image(args.iso, prepared, 256 * live.MIB)
     kernel, initrd = root / "vmlinuz", root / "test-initrd"
@@ -118,6 +121,14 @@ def main():
             shutil.copyfile(prepared, backing)
             core.run_tool(["mcopy", "-o", "-i", f"{backing}@@{live.MIB}", str(config), "::/boot/rufus/grub.cfg"])
             core.run_tool(["mcopy", "-o", "-i", f"{backing}@@{live.MIB}", str(initrd), "::" + args.initrd_path])
+            if args.bootloader == "syslinux":
+                syslinux_config = root / "syslinux.cfg"
+                core.run_tool(["mcopy", "-i", f"{prepared}@@{live.MIB}", "::/boot/rufus/syslinux.cfg", str(syslinux_config)])
+                text = syslinux_config.read_text()
+                text = re.sub(r"(?m)^\s*(?:TIMEOUT|SERIAL)\s+.*$", "", text)
+                text = re.sub(r"(?<!\S)boot=casper(?=\s|$)", "boot=casper console=ttyS0 ip=frommedia", text)
+                syslinux_config.write_text("SERIAL 0 115200\nTIMEOUT 1\n" + text)
+                core.run_tool(["mcopy", "-o", "-i", f"{backing}@@{live.MIB}", str(syslinux_config), "::/boot/rufus/syslinux.cfg"])
         else:
             core.run_tool(live.iso_command(prepared, "-outdev", str(backing), "-map", str(config), "/boot/grub/grub.cfg",
                                            "-map", str(initrd), args.initrd_path, "-boot_image", "any", "replay", "-end"))

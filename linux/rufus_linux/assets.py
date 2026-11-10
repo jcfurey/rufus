@@ -8,6 +8,7 @@ from .core import RufusError
 
 BOOT_ARRAYS = {
     "mbr-win7": ("mbr_win7.h", "mbr_win7_0x0"),
+    "mbr-syslinux": ("mbr_syslinux.h", "mbr_syslinux_0x0"),
     "fat16-head": ("br_fat16_0x0.h", "br_fat16_0x0"),
     "fat16-freedos": ("br_fat16fd_0x3e.h", "br_fat16_0x3e"),
     "fat32-head": ("br_fat32_0x0.h", "br_fat32_0x0"),
