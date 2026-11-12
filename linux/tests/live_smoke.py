@@ -1,10 +1,12 @@
 #!/usr/bin/python3
-"""Opt-in Casper/Debian live-root reboot tests in private USB VM overlays.
+"""Opt-in Casper/Debian persistence reboot tests in private USB VM overlays.
 
 The source ISO and prepared image remain read-only. A test-only initramfs hook
 runs after the distribution mounts the real live root, writes a marker through that root,
 and checks it on a second boot. Firmware tests remaster a private image with
 that hook, serial console output, and a zero-second GRUB menu timeout.
+--check-stage userspace instead runs the distribution's full startup and checks
+a live user's terminal/PAM session, normal shutdown, and persisted home file.
 """
 
 import argparse
@@ -101,26 +103,31 @@ def select_path(paths, explicit, preferred, prefix):
     return candidates[0]
 
 
-def instrument_initrd(initrd, root, kind, nonce):
-    """Keep Casper's established root-mount checkpoint; run Debian init-bottom."""
+def instrument_initrd(initrd, root, kind, nonce, check_stage="root"):
+    """Preserve vendor hooks; choose a root checkpoint or install a runtime check."""
     expanded = root / "initrd-tree"
     core.run_tool(["unmkinitramfs", str(initrd), str(expanded)])
-    stage = "casper-bottom" if kind == "casper" else "init-bottom"
+    stage = "casper-bottom" if kind == "casper" and check_stage == "root" else "init-bottom"
     order_path = f"scripts/{stage}/ORDER"
     candidates = [p for p in expanded.rglob("ORDER") if p.as_posix().endswith("/" + order_path)]
     if len(candidates) != 1 or candidates[0].is_symlink():
         raise RuntimeError(f"Harness needs one initramfs-tools {stage} ORDER file.")
     order = candidates[0].read_bytes()
     hook_path = f"scripts/{stage}/rufus-persistence-test"
-    hook = HOOK.replace("@KIND@", kind).replace("@NONCE@", nonce).encode()
+    extra = []
+    if check_stage == "userspace":
+        from live_userspace import initrd_files
+        hook, extra = initrd_files(kind, nonce)
+    else:
+        hook = HOOK.replace("@KIND@", kind).replace("@NONCE@", nonce).encode()
     call = f'/{hook_path} "$@"\n'.encode()
     # Casper's existing checks stop before vendor user/desktop customization.
     # Debian's later checkpoint runs all original init-bottom scripts first.
-    order = call + order if kind == "casper" else order.rstrip(b"\n") + b"\n" + call
+    order = call + order if stage == "casper-bottom" else order.rstrip(b"\n") + b"\n" + call
     initrd.chmod(0o600)
     with initrd.open("ab") as stream:
         stream.write(gzip.compress(archive([(hook_path, hook, stat.S_IFREG | 0o755),
-            (order_path, order, stat.S_IFREG | 0o644)])))
+            (order_path, order, stat.S_IFREG | 0o644), *extra])))
     shutil.rmtree(expanded)
 
 
@@ -132,7 +139,9 @@ def instrument_config(text, kind):
                        if re.match(r"^\s*(?:linux(?:efi|16)?|append)\s", line, re.I) else line
                        for line in text.splitlines(keepends=True))
     boot = "boot=casper" if kind == "casper" else "boot=live"
-    flags = "console=ttyS0,115200 panic=-1" + (" ip=frommedia" if kind == "casper" else "")
+    # ip=frommedia is understood by Casper, but generic initramfs-tools later
+    # treats it as a network request and waits forever in our NIC-free guest.
+    flags = "console=ttyS0,115200 panic=-1"
     # Generated GRUB entries quote every word; source GRUB/Syslinux use bare words.
     quoted = '"' + boot + '"'
     count = text.count(quoted)
@@ -153,11 +162,17 @@ def main():
     parser.add_argument("--initrd-path", help="auto-detected; identical initrd aliases are instrumented together")
     parser.add_argument("--kind", choices=("auto", "casper", "debian"), default="auto")
     parser.add_argument("--negative-control", action="store_true", help="also prove disabled persistence cannot pass")
-    parser.add_argument("--timeout", type=int, default=240, help="seconds per boot")
+    parser.add_argument("--check-stage", choices=("root", "userspace"), default="root",
+                        help="root-mount checkpoint, or full systemd startup and a live user's PAM session")
+    parser.add_argument("--timeout", type=int, help="seconds per boot (root: 240, userspace: 600)")
     parser.add_argument("--firmware", choices=("direct", "bios", "uefi", "all"), default="direct")
     parser.add_argument("--layout", choices=("hybrid", "extract"), default="hybrid")
     parser.add_argument("--bootloader", choices=("auto", "grub", "syslinux"), default="auto")
     args = parser.parse_args()
+    if args.timeout is None:
+        args.timeout = 600 if args.check_stage == "userspace" else 240
+    if args.timeout <= 0:
+        parser.error("--timeout must be positive")
     if args.layout != "extract" and args.bootloader != "auto":
         parser.error("--bootloader requires --layout extract")
     qemu, qemu_img = shutil.which("qemu-system-x86_64"), shutil.which("qemu-img")
@@ -197,7 +212,7 @@ def main():
                 initrd_paths.append(path)
             alias.unlink()
     nonce = secrets.token_hex(16)
-    instrument_initrd(initrd, root, kind, nonce)
+    instrument_initrd(initrd, root, kind, nonce, args.check_stage)
     modes = ("bios", "uefi") if args.firmware == "all" else (args.firmware,)
     backing = prepared
     if args.firmware != "direct":
@@ -241,6 +256,15 @@ def main():
             core.run_tool(live.iso_command(prepared, "-outdev", str(backing), *mapping_args,
                                           "-boot_image", "any", "replay", "-end"))
     backing_hash = core.checksum(backing)
+    # Keep provenance even if a guest hangs or fails before result.json exists.
+    inputs = {"iso": str(args.iso), "prepared": str(prepared), "backing": str(backing), "kind": kind,
+              "source_sha256": source_hash, "prepared_sha256": prepared_hash, "backing_sha256": backing_hash,
+              "kernel_sha256": core.checksum(kernel), "test_initrd_sha256": core.checksum(initrd),
+              "layout": args.layout, "bootloader": args.bootloader, "marker_nonce": nonce,
+              "initrd_paths": initrd_paths, "check_stage": args.check_stage,
+              "vm_architecture": "x86_64", "acceleration": "tcg", "network": "none"}
+    (root / "inputs.json").write_text(json.dumps(inputs, indent=2) + "\n")
+    userspace_results = {}
     for mode in modes:
         overlay = root / f"{mode}-persistence.qcow2"
         core.run_tool([qemu_img, "create", "-f", "qcow2", "-F", "raw", "-b", str(backing), str(overlay)])
@@ -256,8 +280,10 @@ def main():
             if mode == "direct":
                 boot = "boot=casper persistent" if kind == "casper" else "boot=live persistence"
                 boot_args += ["-kernel", str(kernel), "-initrd", str(initrd), "-append",
-                              boot + " console=ttyS0,115200 fsck.mode=skip panic=-1" + (" ip=frommedia" if kind == "casper" else "")]
-        for number, expected in ((1, b"RUFUS_PERSISTENCE_FIRST_BOOT_OK"), (2, b"RUFUS_PERSISTENCE_SECOND_BOOT_OK")):
+                              boot + " console=ttyS0,115200 fsck.mode=skip panic=-1"]
+        marker_prefix = "RUFUS_USERSPACE" if args.check_stage == "userspace" else "RUFUS_PERSISTENCE"
+        for number, label in ((1, "FIRST"), (2, "SECOND")):
+            expected = f"{marker_prefix}_{label}_BOOT_OK".encode()
             print(f"Booting real {kind} live root via USB/{mode}, pass {number}", flush=True)
             log = root / f"{mode}-boot-{number}.log"
             command = [qemu, "-machine", machine, "-cpu", "max", "-m", "2048", "-smp", "2", "-nodefaults", "-nic", "none",
@@ -272,9 +298,13 @@ def main():
                 except subprocess.TimeoutExpired as exc:
                     raise AssertionError(f"{kind} {mode} boot {number} timed out; inspect {log}") from exc
             data = log.read_bytes()
-            if result.returncode or expected not in data or b"RUFUS_PERSISTENCE_FAIL" in data:
+            if result.returncode or expected not in data or b"RUFUS_PERSISTENCE_FAIL" in data or b"RUFUS_USERSPACE_FAIL" in data:
                 raise AssertionError(f"{kind} {mode} boot {number} failed; inspect {log}: " +
                                      data[-3000:].decode(errors="replace"))
+            if args.check_stage == "userspace":
+                from live_userspace import verify_userspace
+                userspace_results[f"{mode}-{number}"] = verify_userspace(data, overlay, root, nonce, qemu_img)
+                (root / "userspace-boots.json").write_text(json.dumps(userspace_results, indent=2) + "\n")
             print(f"PASS: {mode}: {expected.decode()}", flush=True)
     if args.negative_control:
         overlay = root / "without-persistence.qcow2"
@@ -284,7 +314,7 @@ def main():
         command = [qemu, "-machine", "pc,accel=tcg", "-cpu", "max", "-m", "2048", "-smp", "2",
                    "-nodefaults", "-nic", "none", "-display", "none", "-serial", "stdio", "-monitor", "none",
                    "-no-reboot", "-L", str(firmware), "-bios", str(bios), "-kernel", str(kernel), "-initrd", str(initrd),
-                   "-append", boot + " console=ttyS0,115200 panic=-1" + (" ip=frommedia" if kind == "casper" else ""),
+                   "-append", boot + " console=ttyS0,115200 panic=-1",
                    "-device", "qemu-xhci", "-drive", "if=none,id=stick,format=qcow2,file=" + str(overlay).replace(",", ",,"),
                    "-device", "usb-storage,drive=stick"]
         with log.open("xb") as stream:
@@ -296,15 +326,14 @@ def main():
         print("PASS: disabled persistence cannot satisfy the live-root check", flush=True)
     if core.checksum(args.iso) != source_hash or core.checksum(prepared) != prepared_hash or core.checksum(backing) != backing_hash:
         raise AssertionError("A read-only source/prepared/backing image changed during the test.")
-    (root / "result.json").write_text(json.dumps({"iso": str(args.iso.resolve()), "prepared": str(prepared), "kind": kind,
-                                                  "source_sha256": source_hash, "prepared_sha256": prepared_hash,
-                                                  "layout": args.layout, "bootloader": args.bootloader,
-                                                  "initrd_paths": initrd_paths, "marker_nonce": nonce,
-                                                  "check_stage": "before-casper-bottom" if kind == "casper" else "after-init-bottom",
-                                                  "boots": 2 * len(modes) + int(args.negative_control),
-                                                  "negative_control": "passed" if args.negative_control else "not run",
-                                                  "persistence": "passed", "boot_method": modes,
-                                                  "physical_storage_used": False, "source_images_modified": False}, indent=2) + "\n")
+    result = {**inputs,
+              "check_stage": "userspace" if args.check_stage == "userspace" else
+                  ("before-casper-bottom" if kind == "casper" else "after-init-bottom"),
+              "userspace": userspace_results, "boots": 2 * len(modes) + int(args.negative_control),
+              "negative_control": "passed" if args.negative_control else "not run",
+              "persistence": "passed", "boot_method": modes,
+              "physical_storage_used": False, "source_images_modified": False}
+    (root / "result.json").write_text(json.dumps(result, indent=2) + "\n")
 
 
 if __name__ == "__main__":

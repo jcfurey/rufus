@@ -7,6 +7,7 @@ LIVE_OUTPUT ?= build/live-reboot-test
 LIVE_LAYOUT ?= hybrid
 LIVE_BOOTLOADER ?= auto
 LIVE_KIND ?= auto
+LIVE_USERSPACE_TIMEOUT ?= 600
 SYSLINUX_KERNEL ?=
 SYSLINUX_OUTPUT ?= build/syslinux-boot-test
 WTG_IMAGE ?=
@@ -21,7 +22,7 @@ FS_OUTPUT ?= build/filesystem-test
 SOURCES = $(wildcard rufus_linux/*.py)
 RESOURCES = $(wildcard ../res/freedos/* ../src/ms-sys/inc/*.h) ../res/uefi/uefi-ntfs.img
 
-.PHONY: all check smoke-test gui-test boot-test uefi-test live-test syslinux-test windows-togo-test vhdx-test vhdx-winpe-test filesystem-test integration install uninstall clean deb
+.PHONY: all check smoke-test gui-test boot-test uefi-test live-test live-userspace-test syslinux-test windows-togo-test vhdx-test vhdx-winpe-test filesystem-test integration install uninstall clean deb
 all: dist/rufus-linux
 
 dist/rufus-linux: $(SOURCES) $(RESOURCES) build_assets.py Makefile ../LICENSE.txt
@@ -51,6 +52,9 @@ uefi-test:
 
 live-test:
 	$(PYTHON) tests/live_smoke.py "$(LIVE_ISO)" --output-dir "$(LIVE_OUTPUT)" --firmware all --layout "$(LIVE_LAYOUT)" --bootloader "$(LIVE_BOOTLOADER)" --kind "$(LIVE_KIND)" --negative-control
+
+live-userspace-test:
+	$(PYTHON) tests/live_smoke.py "$(LIVE_ISO)" --output-dir "$(LIVE_OUTPUT)" --firmware all --layout "$(LIVE_LAYOUT)" --bootloader "$(LIVE_BOOTLOADER)" --kind "$(LIVE_KIND)" --check-stage userspace --negative-control --timeout "$(LIVE_USERSPACE_TIMEOUT)"
 
 syslinux-test:
 	$(PYTHON) tests/syslinux_smoke.py --kernel "$(SYSLINUX_KERNEL)" --output-dir "$(SYSLINUX_OUTPUT)"

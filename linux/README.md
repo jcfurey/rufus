@@ -288,6 +288,9 @@ make -C linux live-test LIVE_ISO=/path/to/DragonOS_Resolute_R2.2.iso \
     LIVE_OUTPUT=build/dragonos-reboot-test
 make -C linux live-test LIVE_ISO=/path/to/debian-live.iso LIVE_KIND=debian \
     LIVE_OUTPUT=build/debian-reboot-test
+# Continue through full userspace, a live user's terminal session and shutdown.
+make -C linux live-userspace-test LIVE_ISO=/path/to/debian-live.iso LIVE_KIND=debian \
+    LIVE_OUTPUT=build/debian-userspace-test
 sudo make -C linux integration # optional: one authorization for a disposable-loop test matrix
 ```
 
@@ -526,3 +529,25 @@ persistence implementation and boot testing remain on the parity checklist.
   `dragonos-regression-0.11-final`, `arm64-uefi-0.11` and `arm32-uefi-0.11`.
   Full userspace, full ARM live-root persistence, Secure Boot, remote native ARM
   CI and physical USB validation remain acceptance work. See [PERSISTENCE.md](PERSISTENCE.md).
+
+### Userspace validation update, 2026-11-12
+
+- All 230 automated tests pass; standalone and Debian packages build.
+- Debian Live 13.7.0 and the cached DragonOS media pass 24 positive userspace
+  boots across hybrid, extracted GRUB and extracted Syslinux BIOS/UEFI layouts.
+  Each real live user writes a home file, shuts down, reboots and reads it back.
+  Independent ext4 inspection confirms contents and ownership after each boot.
+  All six disabled-persistence controls pass; input-image hashes are unchanged.
+- The opt-in `live-userspace-test` target preserves vendor startup scripts,
+  uses volatile test instrumentation and private USB VM overlays, and retains
+  input hashes, full journals, session identity and shutdown evidence.
+- The earlier DragonOS stall was caused by the harness requesting networking
+  in a VM without a NIC. Additional verifier fixes handle serial getty output,
+  Casper's `user-light` sessions and generic GPT data labels on hybrid media.
+  No production-media customization was needed for these fixes.
+
+This establishes terminal-session startup and user-file persistence on the
+tested x86 media. DragonOS still emits vendor customization and shutdown
+warnings; graphical desktop interaction, ARM live-root persistence, Secure Boot
+and physical hardware remain additional acceptance work. Exact fixtures,
+warnings and results are recorded in [PERSISTENCE.md](PERSISTENCE.md).

@@ -31,7 +31,7 @@ class LiveConfigTests(unittest.TestCase):
             result, count = instrument_config(text, "casper")
             self.assertEqual(count, 1)
             self.assertIn("persistent", result)
-            self.assertIn("ip=frommedia", result)
+            self.assertNotIn("ip=", result)
             self.assertNotIn("splash", result)
             self.assertNotIn("quiet", result)
 
