@@ -8,7 +8,7 @@ import stat
 from .core import RufusError, check_cancel, emit
 
 
-def apply_ntfs_image(wim_path, index, target, cancel=None, progress=None):
+def apply_ntfs_image(wim_path, index, target, cancel=None, progress=None, *, preserve_attributes=True):
     target = Path(target)
     info = target.lstat()
     if not stat.S_ISREG(info.st_mode):
@@ -62,6 +62,10 @@ def apply_ntfs_image(wim_path, index, target, cancel=None, progress=None):
         checked(0)
         library.wimlib_register_progress_function(handle, report, None)
         # WIMLIB_EXTRACT_FLAG_NTFS: preserve native Windows/NTFS metadata.
-        checked(library.wimlib_extract_image(handle, index, os.fsencode(target), 0x01))
+        flags = 0x01
+        if not preserve_attributes:
+            # WIMLIB_EXTRACT_FLAG_NO_ATTRIBUTES, for a Linux-captured file tree.
+            flags |= 0x00100000
+        checked(library.wimlib_extract_image(handle, index, os.fsencode(target), flags))
     finally:
         library.wimlib_free(handle)

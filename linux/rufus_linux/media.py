@@ -90,7 +90,10 @@ def populate_volume(root, volume, partition, filesystem, firmware, cancel=None, 
                   "--compress=none", "--check"], cancel)
         run_tool(["mkfs.ntfs", "-F", "-Q", "-s", "512", "-p", str(partition.start),
                   "-H", "255", "-S", "63", "-L", "WINDOWS", str(volume)], cancel)
-        apply_ntfs_image(capture, 1, volume, cancel, progress)
+        # This WIM transports files captured from a Linux directory. Its root
+        # has no Windows system/hidden attributes, so retain mkntfs's metadata
+        # instead of clearing the flags on the NTFS root directory record.
+        apply_ntfs_image(capture, 1, volume, cancel, progress, preserve_attributes=False)
         windows_bootcode(volume, filesystem)
 
 

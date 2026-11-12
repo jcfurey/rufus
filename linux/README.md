@@ -570,3 +570,20 @@ ARM acceptance reaches Casper's real live root before user customization;
 full ARM userspace, native ARM host CI, Secure Boot and physical USB/board tests
 remain separate. See [ARM_LIVE_TESTS.md](ARM_LIVE_TESTS.md) for reproduction,
 fixture warnings and the audited result index.
+
+### Windows installer NTFS validation update, 2026-11-12
+
+The installer file-copy WIM is captured from a Linux directory, which has no
+Windows system/hidden attributes. Applying those attributes to the NTFS root
+cleared mkntfs's flags and caused Windows CHKDSK to report incorrect information
+in file record 5. Installer creation now retains the NTFS attributes while
+copying the staged files. Windows To Go still restores the original Windows
+image's attributes.
+
+A fresh installer volume passes CHKDSK without repairs in WinPE
+10.0.26100.9457 through UEFI. The prior volume reproduces the error, and Windows'
+repair restores the missing flags. BIOS/UEFI media tests now check root metadata
+as well as copied contents; the automated suite and both package builds pass.
+Screenshots, input hashes and record comparisons are under ignored
+`linux/build/real-media/windows-setup-uefi-20261112-v1` and `-v2`.
+These are filesystem checks; full installation/OOBE acceptance is separate.

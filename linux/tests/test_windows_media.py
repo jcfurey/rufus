@@ -106,6 +106,10 @@ class WindowsMediaTests(unittest.TestCase):
                 for relative in ("sources/boot.wim", "EFI/BOOT/BOOTX64.EFI", "boot/BCD", "bootmgr"):
                     result = subprocess.run(["ntfscat", str(volume), "/" + relative], check=True, capture_output=True)
                     self.assertEqual(result.stdout, (self.tree / relative).read_bytes())
+                # Clearing the legacy NTFS root's system/hidden flags causes
+                # CHKDSK errors even though ntfs-3g can read the volume.
+                info = subprocess.check_output(["ntfscat", "--inode", "5", "--attribute", "16", str(volume)])
+                self.assertEqual(struct.unpack_from("<I", info, 32)[0] & 0x6, 0x6)
                 if firmware == "uefi":
                     with output.open("rb") as source:
                         source.seek(parts[1].start * 512)
