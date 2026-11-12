@@ -294,6 +294,11 @@ make -C linux live-userspace-test LIVE_ISO=/path/to/debian-live.iso LIVE_KIND=de
 sudo make -C linux integration # optional: one authorization for a disposable-loop test matrix
 ```
 
+Opt-in real Windows installation and first-login tests are documented in
+[WINDOWS_SETUP_TESTS.md](WINDOWS_SETUP_TESTS.md). They use private virtual disks
+and locally supplied Windows media, with separate BIOS/UEFI installer, portable
+Windows and unsupported-hardware control cases.
+
 The optional integration harness requires one elevated invocation for the entire
 test matrix, avoiding a separate password prompt for each UDisks operation.
 Unprivileged invocations exit before contacting UDisks and never open a password

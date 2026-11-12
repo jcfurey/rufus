@@ -16,6 +16,11 @@ WTG_OUTPUT ?= build/windows-togo-boot-test
 WTG_FIRMWARE ?= uefi
 VHDX_OUTPUT ?= build/vhdx-boot-test
 WINDOWS_TREE ?=
+WINDOWS_INDEX ?=
+WINDOWS_SETUP_OUTPUT ?= build/windows-setup-test
+WINDOWS_SETUP_FIRMWARE ?= uefi
+WINDOWS_SETUP_TIMEOUT ?= 14400
+WTG_OOBE_OUTPUT ?= build/windows-togo-oobe-test
 VHDX_WINPE_OUTPUT ?= build/vhdx-winpe-test
 FS_KERNEL ?=
 FS_MODULES ?=
@@ -23,7 +28,7 @@ FS_OUTPUT ?= build/filesystem-test
 SOURCES = $(wildcard rufus_linux/*.py)
 RESOURCES = $(wildcard ../res/freedos/* ../src/ms-sys/inc/*.h) ../res/uefi/uefi-ntfs.img
 
-.PHONY: all check smoke-test gui-test boot-test uefi-test live-test live-userspace-test syslinux-test windows-togo-test vhdx-test vhdx-winpe-test filesystem-test integration install uninstall clean deb
+.PHONY: all check smoke-test gui-test boot-test uefi-test live-test live-userspace-test syslinux-test windows-togo-test windows-setup-test windows-togo-oobe-test vhdx-test vhdx-winpe-test filesystem-test integration install uninstall clean deb
 all: dist/rufus-linux
 
 dist/rufus-linux: $(SOURCES) $(RESOURCES) build_assets.py Makefile ../LICENSE.txt
@@ -62,6 +67,12 @@ syslinux-test:
 
 windows-togo-test:
 	$(PYTHON) tests/windows_togo_smoke.py --image "$(WTG_IMAGE)" --output-dir "$(WTG_OUTPUT)" --firmware "$(WTG_FIRMWARE)" --usb
+
+windows-setup-test:
+	$(PYTHON) tests/windows_setup_smoke.py --source-tree "$(WINDOWS_TREE)" --index "$(WINDOWS_INDEX)" --output-dir "$(WINDOWS_SETUP_OUTPUT)" --firmware "$(WINDOWS_SETUP_FIRMWARE)" --timeout "$(WINDOWS_SETUP_TIMEOUT)"
+
+windows-togo-oobe-test:
+	$(PYTHON) tests/windows_setup_smoke.py --togo-image "$(WTG_IMAGE)" --output-dir "$(WTG_OOBE_OUTPUT)" --firmware "$(WTG_FIRMWARE)" --timeout "$(WINDOWS_SETUP_TIMEOUT)"
 
 vhdx-test:
 	$(PYTHON) tests/vhdx_smoke.py --output-dir "$(VHDX_OUTPUT)"
