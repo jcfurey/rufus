@@ -606,3 +606,25 @@ The 238-test suite, both UEFI boot regressions and both package builds pass.
 The regression checks inspect the helper's type GUID and 64-bit GPT attribute.
 Private Windows failure/progress evidence is under ignored
 `linux/build/real-media/windows-setup-uefi-20261112-v3` and `-v4`.
+
+### Windows Setup/OOBE checkpoint, 2026-11-12
+
+The isolated acceptance harness now tests real first-login evidence and an
+unsupported-hardware control. The final control passes with explicit TPM, RAM
+and Secure Boot blocks and unchanged source hashes. The UEFI installer reaches
+the real local user's desktop with completed Setup/OOBE, the requested locale
+and time zone, and encryption prevention. Its complete acceptance result fails
+because the tailored-experiences value is `2`, while the checker requires `0`;
+the effective setting and cause remain unresolved.
+
+The BIOS installation and both fresh To Go cases were stopped at the user's
+request before first-login evidence arrived. To Go's OOBE handoff remains under
+investigation. The privacy answer file now includes upstream's `HideEULAPage`
+setting; full validation of that change remains incomplete. The automated
+239-test suite and standalone/deb builds pass.
+
+VM disks and temporary media were deleted at the user's request to recover
+space, including earlier Debian, DragonOS and ARM test disks. Logs, screenshots,
+input checksums and deletion manifests remain. See
+[WINDOWS_SETUP_TESTS.md](WINDOWS_SETUP_TESTS.md) for provenance, diagnostic input,
+per-case results and the remaining work; deleted runs require fresh disks.

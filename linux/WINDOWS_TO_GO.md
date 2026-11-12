@@ -159,6 +159,12 @@ The probe changes no registry values; output stays inside the disposable copy.
 Console evidence does not establish completion of the specialize answer-file
 commands or OOBE. The default probe waits for the answer-file commands instead.
 
+For complete OOBE and first-login checks, use the separate acceptance harness
+in [WINDOWS_SETUP_TESTS.md](WINDOWS_SETUP_TESTS.md). It requires a fresh image
+with the documented setup options and verifies the actual local user's Explorer
+session, requested settings and portable policies. Its results are separate
+from the kernel/service-startup checks above.
+
 The workflow follows Microsoft's
 [deployment instructions](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/deployment/windows-to-go/deploy-windows-to-go)
 and [BCDBoot reference](https://learn.microsoft.com/en-us/windows-hardware/manufacture/desktop/bcdboot-command-line-options-techref-di).

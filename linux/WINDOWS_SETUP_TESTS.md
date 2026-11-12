@@ -200,7 +200,8 @@ matching upstream. A new image was built by the production native deployment
 and WinPE finalizer directly from the verified cached tree; this rebuild did
 not repeat the public CLI's ISO-extraction wrapper. Its SHA-256 is
 `76d212257591b1dd64bc45cbec69e49361790d76a75f3968642e8de975d2ff2c`.
-Fresh first-login validation of that image is still pending. The earlier error
+Fresh first-login validation of that image did not finish before the user
+requested stopping the session. The earlier error
 screen and subsequent kernel crash are retained as distinct observations;
 neither is a successful OOBE result.
 
@@ -213,7 +214,69 @@ production settings were retained. This is an interrupted installation test.
 
 The standard BIOS case, `build/real-media/windows-setup-bios-20261112-v1`,
 initially reset during image application with 3 GiB of RAM. The partial disk
-and logs remain under `three-gib-reset-attempt`; the reset's cause is unresolved.
-The retry uses a fresh blank target and 4 GiB. Both standard installers were
-prepared before the `HideEULAPage` correction, while the fresh To Go `v2` cases
-use the corrected answer file and Intel identity from their first boot.
+was discarded during the cleanup below; logs remain under
+`three-gib-reset-attempt`, and the reset's cause is unresolved.
+The retry used a fresh blank target and 4 GiB, completed WinPE installation,
+and automatically booted its installed target. Like UEFI, it was then stopped
+and resumed with the Intel identity; the original configuration and completed
+WinPE logs are in `winpe-amd-cpu-attempt`. Both standard installers were prepared
+before the `HideEULAPage` correction, while the fresh To Go `v2` cases use the
+corrected answer file and Intel identity from their first boot.
+
+## Session checkpoint and cleanup, November 12, 2026
+
+No positive case passed the complete first-login/settings validator in this
+session. The hardware control passed independently.
+
+| Case | Observed result |
+| --- | --- |
+| Standard UEFI `v4` | Setup/OOBE completed and the automatic observer ran in the real `rufus-test` Explorer session. Full acceptance failed the tailored-experiences privacy check. |
+| Standard BIOS `v1` retry | Installed Windows, completed first boot and logged the end of post-OOBE. Stopped before the requested user's profile or observer report appeared. |
+| To Go UEFI `v2` | Completed first boot and processed the account/settings answer file. Remained in OOBE without a first-login report. |
+| To Go BIOS `v2` | Completed first boot; CloudExperienceHost reported success, followed by a timeout handing off through `onLastOOBEWebAppFinished`. No first-login report. |
+| Hardware control `v3` | Passed: explicit TPM, RAM and Secure Boot blocks, absent live bypass key, matching nonce and unchanged inputs. |
+
+The UEFI report has no observer errors and records the expected local-user SID,
+interactive Explorer owner, completed setup flags, profile nonce, `en-US`,
+`Central Standard Time`, offline-account setting and encryption-prevention
+setting. BitLocker reports the OS volume fully decrypted. Advertising is `0`
+and diagnostic data is `1`, but `TailoredExperiencesWithDiagnosticDataEnabled`
+is `2`, while the validator requires `0`. Offline reads confirm `2` in the
+actual user's hive. UnattendGC separately records an attempted write of `0`
+and a telemetry custom-commit warning. The effective meaning and cause of this
+discrepancy remain unresolved; neither the production behavior nor the
+validator was changed to make this observation pass. A follow-up should inspect
+the current Personalized Offers setting as well as the legacy value, because
+Microsoft documents the
+[replacement of Tailored Experiences](https://support.microsoft.com/en-us/servicing/os/windows-11/2024/11/november-21-2024-kb5046740-os-build-26100-2454-preview).
+
+UEFI diagnostic input opened Task Manager and Windows security/Run dialogs
+while waiting for the desktop and slow observer startup. A command attempted to
+close Task Manager; the observer-requested shutdown subsequently required
+confirmation to close that diagnostic application. The full keyboard history
+is retained. No account/settings edits, forced OOBE completion, manual Explorer
+launch or manual observer launch were used. The BIOS and fresh To Go runs
+received no keyboard input.
+
+The BIOS installation logged AppXSvc crashes during package preregistration,
+then continued registering later packages. To Go logs include CloudExperienceHost
+script/handoff errors. These remain diagnostic findings, not established causes
+or completed acceptance results. All three unfinished VMs were stopped at the
+user's request at approximately 22:23 UTC. Their exit status reflects that stop,
+not expiry of the configured timeout.
+
+Each of the four cases retains `wrap-up.json`, cold diagnostic extracts,
+`wrap-up-input-hashes.json`, screenshots and existing serial/keyboard records.
+All recorded source/prepared-input hashes were unchanged. At the user's request,
+the disposable VM disks and temporary media copies were then deleted, including
+the freshly built To Go source used only by these tests. Deletion manifests
+record the removed files and allocated sizes. These runs cannot be resumed;
+repeat tests require rebuilding their private disks. Earlier Linux VM disks and
+temporary boot files were also removed, with a manifest at
+`build/real-media/vm-cleanup-20261112.json`; their logs and acceptance records
+remain available. This cleanup removed approximately 254 GiB of allocated VM
+and temporary-media files. No QEMU VMs remained running afterward.
+
+The next work is to resolve the privacy mismatch and To Go OOBE handoff, then
+repeat the complete matrix. Additional Windows releases, architectures, physical
+USB hardware and Secure Boot remain separate coverage.

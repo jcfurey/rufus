@@ -24,11 +24,11 @@ are present. File-backed tests alone do not establish bootability.
 | Drive backup to DD/fixed VHD/fixed VHDX | Implemented, read-only source, VHDX sector geometry and protected output; native/file/QEMU round trips pass | Physical drive capture; additional producers and large-file boundaries |
 | Drive backup to FFU | Pending | Format-specific creation and interoperability |
 | Windows UEFI/FAT32 install media | Implemented; OVMF firmware fixture boots | Real Windows FAT32 boot and hardware validation |
-| Windows BIOS media | Implemented with upstream boot code, FAT32/NTFS, desktop and CLI | Actual Windows BIOS boot and hardware validation |
-| UEFI:NTFS | Implemented with bundled driver; firmware fixture and actual Windows 11 Setup boot pass | Secure Boot and physical hardware validation |
+| Windows BIOS media | Implemented with upstream boot code, FAT32/NTFS, desktop and CLI; actual Windows 11 NTFS installation and installed-system boot observed | Full BIOS first-login/settings acceptance, real FAT32 boot and hardware validation |
+| UEFI:NTFS | Implemented with bundled driver; corrected helper GPT type; actual Windows 11 installation reaches the local user's desktop | Complete settings acceptance, Secure Boot and physical hardware validation |
 | Windows UDF installation ISOs | Implemented with 7-Zip; actual Windows 11 UDF bridge tested | Additional ISO versions and malformed-UDF coverage |
-| Windows hardware-check bypass | WinPE answer-file injection implemented and tested with wimlib | Actual Windows Setup validation |
-| Local account, privacy, locale, encryption options | Implemented in desktop and CLI; safe answer-file staging tested | Actual OOBE validation; automatic Linux-to-Windows regional mapping |
+| Windows hardware-check bypass | Actual UEFI Setup proceeds with bypass; matching control reports TPM/RAM/Secure Boot blocks without bypass | Additional Windows releases and physical hardware |
+| Local account, privacy, locale, encryption options | UEFI first-login report confirms the real local account, locale/time zone and encryption-prevention setting; complete acceptance rejects tailored-experiences value `2` | Resolve privacy mismatch; complete BIOS/To Go first-login/settings checks; automatic Linux-to-Windows regional mapping |
 | Remaining Windows setup/QoL options | Pending | Installer edition selection, 2023 bootloaders, policy changes, silent installation |
 | Windows To Go | Native NTFS WIM/ESD deployment, edition/CPU selection, isolated Microsoft WinPE tools; desktop/CLI; real Windows 11 BIOS/UEFI USB startup and live portable-policy checks pass | Additional releases/layouts, ARM64/32-bit Windows, full OOBE and physical USB validation |
 | FreeDOS | Implemented, desktop/CLI; SeaBIOS boots FAT16 and FAT32 through COMMAND.COM | Physical hardware and regional keyboard configuration |
@@ -90,6 +90,11 @@ The tested x86 **terminal startup and user-file persistence** and emulated
 priority is **Windows Setup/OOBE and To Go coverage**. Graphical desktop
 interaction, ARM userspace sessions and native ARM host CI remain additional coverage.
 Other milestones remain open unless their acceptance evidence is recorded.
+The current Windows checkpoint has a completed UEFI user session but a failing
+privacy check; BIOS and To Go first-login checks remain incomplete. See
+[WINDOWS_SETUP_TESTS.md](WINDOWS_SETUP_TESTS.md). Disposable Windows and earlier
+Linux VM disks were deleted at the user's request; evidence records remain,
+and further VM validation requires rebuilding private disks.
 
 | Priority | Milestone | Work without physical hardware | Required acceptance evidence |
 | --- | --- | --- | --- |
@@ -140,8 +145,9 @@ shipped inside the portable archive.
 
 Windows and FreeDOS now prepare disk images without elevated access and enter
 the common disk writer only after successful construction. Actual Windows 11
-Setup boot was validated with a private VM overlay, without altering the source
-ISO or a physical drive. Full installation/OOBE validation remains outstanding.
+installation reached a real UEFI local-user session in private VM disks,
+without changing the recorded source inputs or using a physical drive. Complete
+settings acceptance remains outstanding because of the privacy mismatch.
 Windows To Go has a separate NTFS deployment and isolated WinPE boot/policy
 configuration path. See [WINDOWS_TO_GO.md](WINDOWS_TO_GO.md) for dependencies,
 CPU/layout selection, transaction boundaries, and validation limits.
