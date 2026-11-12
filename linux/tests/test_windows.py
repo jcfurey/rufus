@@ -38,6 +38,7 @@ class WindowsConfigurationTests(unittest.TestCase):
         self.assertEqual({node.get("pass") for node in root}, {"windowsPE", "specialize", "oobeSystem"})
         self.assertTrue(all(node.get("processorArchitecture") == "arm64" for node in root.findall(".//u:component", NS)))
         self.assertEqual(root.findtext(".//u:LocalAccount/u:Name", namespaces=NS), "Test User")
+        self.assertEqual(root.findtext(".//u:HideEULAPage", namespaces=NS), "true")
         self.assertEqual(root.findtext(".//u:ProtectYourPC", namespaces=NS), "3")
         self.assertEqual(root.findtext(".//u:PreventDeviceEncryption", namespaces=NS), "true")
         self.assertEqual(root.findtext(".//u:UILanguage", namespaces=NS), "en-US")
@@ -56,6 +57,7 @@ class WindowsConfigurationTests(unittest.TestCase):
     def test_xml_escaping_preserves_values_without_elements(self):
         root = ET.fromstring(windows.answer_file(windows.WindowsOptions(timezone="A & B < C")))
         self.assertEqual(root.findtext(".//u:TimeZone", namespaces=NS), "A & B < C")
+        self.assertIsNone(root.find(".//u:HideEULAPage", NS))
 
     def test_oobe_only_config_is_in_oem_panther_and_keeps_case(self):
         options = windows.WindowsOptions(local_account="alice", privacy=True)

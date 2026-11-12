@@ -106,6 +106,7 @@ def answer_file(options, architecture="amd64"):
         if options.privacy or options.offline_account:
             oobe = element(shell, "OOBE")
             if options.privacy:
+                element(oobe, "HideEULAPage", "true")
                 element(oobe, "ProtectYourPC", 3)
             if options.offline_account:
                 element(oobe, "HideOnlineAccountScreens", "true")
