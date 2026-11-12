@@ -24,6 +24,7 @@ class Partition:
     mbr_type: int = 0x07
     name: str = "Rufus"
     bootable: bool = False
+    gpt_attributes: int = 0
 
     @property
     def end(self):
@@ -42,6 +43,8 @@ def write_layout(fd, size, partitions, table="gpt", *, sector=512):
     ordered = sorted(partitions, key=lambda p: p.start)
     if any(p.sectors <= 0 or p.start < first or p.end > last or p.kind not in GUID_TYPES for p in ordered):
         raise RufusError("Partition lies outside the image's usable sectors.")
+    if any(type(p.gpt_attributes) is not int or not 0 <= p.gpt_attributes < 2**64 for p in ordered):
+        raise RufusError("GPT partition attributes must be an unsigned 64-bit integer.")
     if any(a.end >= b.start for a, b in zip(ordered, ordered[1:])):
         raise RufusError("Image partitions overlap.")
     master = bytearray(512)
@@ -66,7 +69,7 @@ def write_layout(fd, size, partitions, table="gpt", *, sector=512):
         if len(name) > 72:
             raise RufusError("GPT partition name exceeds 36 UTF-16 code units.")
         struct.pack_into("<16s16sQQQ72s", entries, index * 128, uuid.UUID(GUID_TYPES[partition.kind]).bytes_le,
-                         uuid.uuid4().bytes_le, partition.start, partition.end, 0, name)
+                         uuid.uuid4().bytes_le, partition.start, partition.end, partition.gpt_attributes, name)
     disk_guid = uuid.uuid4().bytes_le
     entries_crc = zlib.crc32(entries)
 

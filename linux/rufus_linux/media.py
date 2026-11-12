@@ -32,7 +32,11 @@ def windows_partitions(size, filesystem="vfat", firmware="uefi"):
     parts = [Partition(2048, main_end - 2048, "esp" if filesystem == "vfat" and firmware == "uefi" else "basic",
                        0x0c if filesystem == "vfat" else 0x07, "Windows", firmware == "bios")]
     if secondary is not None:
-        parts.append(Partition(secondary, secondary_sectors, "esp", 0xef, "UEFI_NTFS"))
+        # Match upstream CreatePartition in src/drive.c: Windows Setup can pick
+        # the USB helper as its system partition if it is declared as an ESP.
+        # UEFI still discovers its FAT loader; bit 63 suppresses a drive letter.
+        parts.append(Partition(secondary, secondary_sectors, "basic", 0xef, "UEFI_NTFS",
+                               gpt_attributes=1 << 63))
     if parts[0].sectors <= 0 or (filesystem == "vfat" and parts[0].sectors > 0xffffffff):
         raise RufusError("Windows partition size is outside the selected filesystem's limits.")
     return table, parts

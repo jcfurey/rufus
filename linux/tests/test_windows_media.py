@@ -43,6 +43,18 @@ class LayoutTests(unittest.TestCase):
             self.assertEqual(parsed["label"], "gpt")
             self.assertEqual([p["start"] for p in parsed["partitions"]], [p.start for p in parts])
             self.assertEqual([p["size"] for p in parsed["partitions"]], [p.sectors for p in parts])
+            # The helper must not compete with the installation target's ESP.
+            self.assertEqual(parsed["partitions"][1]["type"].lower(), layout.GUID_TYPES["basic"])
+            with image.open("rb") as disk:
+                disk.seek(2 * 512 + 128 + 48)
+                self.assertEqual(struct.unpack("<Q", disk.read(8))[0], 1 << 63)
+
+    def test_gpt_attributes_reject_out_of_range_values(self):
+        with tempfile.TemporaryFile() as disk:
+            for value in (-1, 2**64, True):
+                with self.subTest(value=value), self.assertRaisesRegex(core.RufusError, "attributes"):
+                    layout.write_layout(disk.fileno(), 64 * boot.MIB,
+                        [layout.Partition(2048, 4096, gpt_attributes=value)])
 
     def test_overlapping_partitions_are_rejected(self):
         with tempfile.TemporaryFile() as disk:

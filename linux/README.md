@@ -587,3 +587,17 @@ as well as copied contents; the automated suite and both package builds pass.
 Screenshots, input hashes and record comparisons are under ignored
 `linux/build/real-media/windows-setup-uefi-20261112-v1` and `-v2`.
 These are filesystem checks; full installation/OOBE acceptance is separate.
+
+### Windows installer GPT validation update, 2026-11-12
+
+The UEFI:NTFS helper now uses the Microsoft basic-data GPT type with the
+no-drive-letter attribute, matching upstream Rufus. Declaring this small FAT
+partition as an EFI System Partition caused Windows Setup to select an
+unsuitable system partition and fail with `0x8007000e`, even when the target
+disk had its own 260-MiB ESP. A fresh installer with the corrected type proceeds
+through target selection and installs Windows. Full OOBE validation is separate.
+
+The 238-test suite, both UEFI boot regressions and both package builds pass.
+The regression checks inspect the helper's type GUID and 64-bit GPT attribute.
+Private Windows failure/progress evidence is under ignored
+`linux/build/real-media/windows-setup-uefi-20261112-v3` and `-v4`.
