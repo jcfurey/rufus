@@ -33,9 +33,9 @@ are present. File-backed tests alone do not establish bootability.
 | Windows To Go | Native NTFS WIM/ESD deployment, edition/CPU selection, isolated Microsoft WinPE tools; desktop/CLI; real Windows 11 BIOS/UEFI USB startup and live portable-policy checks pass | Additional releases/layouts, ARM64/32-bit Windows, full OOBE and physical USB validation |
 | FreeDOS | Implemented, desktop/CLI; SeaBIOS boots FAT16 and FAT32 through COMMAND.COM | Physical hardware and regional keyboard configuration |
 | MS-DOS | Pending | Supported source extraction and boot tests |
-| GRUB ISO extraction mode | Implemented FAT32 for conventional Casper/Debian menus; real Debian/DragonOS persistence reboots under x86 BIOS/UEFI; ARM64/ARM32 UEFI kernel boots | Additional distributions, full ARM live-root persistence, Secure Boot and physical devices |
+| GRUB ISO extraction mode | Implemented FAT32 for conventional Casper/Debian menus; Debian/DragonOS persistence reboots under x86 BIOS/UEFI; ARM64/ARM32 Casper fixture live-root reboots under UEFI | Additional distributions, ARM userspace sessions, Secure Boot and physical devices |
 | Syslinux ISO extraction mode | Native Syslinux BIOS and GRUB UEFI; Debian static submenu scopes; real Debian/DragonOS persistence reboots pass | Additional Syslinux-source distributions, dynamic/utility menus and Syslinux variants |
-| Linux persistence | Casper/DragonOS and Debian, desktop/CLI; full terminal userspace and user-file write/shutdown/reboot/read under BIOS/UEFI across hybrid/GRUB/Syslinux layouts | Graphical desktop interaction, additional distros, full ARM live-root reboots, Secure Boot and physical USB validation |
+| Linux persistence | Casper/DragonOS and Debian, desktop/CLI; x86 terminal userspace and user-file write/shutdown/reboot/read across hybrid/GRUB/Syslinux BIOS/UEFI layouts; ARM32/ARM64 Casper live-root UEFI reboots | Graphical desktop interaction, additional distros, ARM userspace sessions, Secure Boot and physical USB validation |
 | Windows ISO and UEFI Shell download | Pending | Official-source catalog, cancellation, integrity and caching |
 | UEFI runtime media validation | Pending | Validation loader integration and firmware tests |
 | Secure Boot DBX/SBAT checks | Pending | PE hashing, signature/catalog parsing, revocation data and fixtures |
@@ -45,14 +45,14 @@ are present. File-backed tests alone do not establish bootability.
 
 ## Current work plan
 
-Updated **2026-11-12**, following version **0.11.0**, commit `2ebb3352`.
+Updated **2026-11-12**, following version **0.11.0** and userspace commit `426ddacb`.
 Continue with software implementation and validation without physical storage
 or target boards. Hardware acceptance remains a separate stage; pending
 hardware checks do not prevent the work below.
 
 ### Established baseline
 
-- 230 automated tests pass. Standalone and Debian packages build. The preceding
+- 234 automated tests pass. Standalone and Debian packages build. The preceding
   version's GTK checks pass; the userspace-harness changes do not alter the GUI.
 - Debian Live 13.7.0 passes twelve positive BIOS/UEFI USB VM boots across hybrid,
   extracted GRUB and extracted Syslinux persistence layouts. A control with
@@ -65,6 +65,11 @@ hardware checks do not prevent the work below.
   are documented in [PERSISTENCE.md](PERSISTENCE.md).
 - ARM32 and ARM64 media boot real kernels through UEFI and USB in emulation.
   FAT16/UDF mount/write/reboot/read tests also pass on x86-64, ARM32 and ARM64.
+- ARM32 and ARM64 locally assembled Ubuntu Base/Casper fixtures now pass four
+  UEFI live-root persistence boots and two UEFI disabled-persistence controls.
+  Signed base/package inputs, native guest ownership, firmware and result
+  hashes are recorded in [ARM_LIVE_TESTS.md](ARM_LIVE_TESTS.md). A shared-harness
+  regression also passes four Debian x86 BIOS/UEFI userspace boots and one control.
 - The earlier DragonOS stall was caused by the harness's `ip=frommedia` option
   triggering late initramfs networking in a VM without a NIC. With that option
   removed, the original vendor customization completes and systemd reaches
@@ -74,20 +79,22 @@ hardware checks do not prevent the work below.
 Kernel handoff, live-root persistence and full userspace startup are distinct
 acceptance milestones. The Debian/DragonOS userspace matrix now reaches real
 live-user terminal sessions and verifies home-file persistence. Graphical desktop
-interaction and full ARM live-root persistence remain additional acceptance
-work. See [PERSISTENCE.md](PERSISTENCE.md).
+interaction and ARM userspace sessions remain additional acceptance work.
+ARM live-root acceptance is recorded separately from native ARM host CI, which
+has not run remotely. See [PERSISTENCE.md](PERSISTENCE.md).
 
 ### Hardware-free priorities
 
-The tested x86 **terminal startup and user-file persistence** milestone is
-validated. The next priority is **ARM32/ARM64 live-root persistence**.
-Graphical desktop interaction remains additional Linux startup coverage.
+The tested x86 **terminal startup and user-file persistence** and emulated
+**ARM32/ARM64 live-root persistence** milestones are validated. The next software
+priority is **Windows Setup/OOBE and To Go coverage**. Graphical desktop
+interaction, ARM userspace sessions and native ARM host CI remain additional coverage.
 Other milestones remain open unless their acceptance evidence is recorded.
 
 | Priority | Milestone | Work without physical hardware | Required acceptance evidence |
 | --- | --- | --- | --- |
 | 1 | Full Linux startup and user-session persistence — terminal matrix validated | Expand the completed Debian/DragonOS terminal checks to graphical desktop interaction and additional distributions. Retain vendor startup/shutdown diagnostics. | Recorded: 24 BIOS/UEFI userspace boots across hybrid/GRUB/Syslinux, real live-user terminal sessions, independent ext4 content/owner checks and six disabled-persistence controls. Graphical session acceptance remains open. |
-| 2 | ARM32/ARM64 live-root persistence | Build or obtain matching kernel, userspace, initramfs and UEFI fixtures. Extend the existing ARM kernel tests to mount the real live root and persistence store. Execute native ARM host CI when a runner is available. | ARM32 and ARM64 UEFI live-root write/reboot/read checks, disabled-persistence controls, and recorded fixture provenance. Record native ARM host results separately from emulated guest results. |
+| 2 | ARM32/ARM64 live-root persistence — guest matrix validated | Extend the completed Ubuntu Base/Casper root checks to ARM user sessions and additional distributions. Execute native ARM host CI when a runner is available. | Recorded: four UEFI write/reboot/read boots, two UEFI disabled-persistence controls, signed source provenance and unchanged image hashes. Native ARM host CI remains separate and unexecuted. |
 | 3 | Windows Setup, OOBE and To Go coverage | Complete installations in private VM disks; check hardware-check bypass, account/privacy/locale/encryption options and remaining setup choices. Expand release/layout coverage, including x86 and ARM64 Windows targets when suitable OS/WinPE media are available. | Actual Setup/OOBE completion and resulting settings, plus boot and portable-policy checks for each tested edition/architecture/layout. ARM32/Windows RT remains unsupported. |
 | 4 | Storage formats and diagnostics | Implement FFU/VTSI, differencing VHD/VHDX and VHDX log replay. Expand producer interoperability and large sparse-image boundaries. Exercise read/write failures, interruptions, permissions and fake-capacity detection with fault injection. | Independent producer/consumer checks, malformed/parent-chain/recovery fixtures, bounded-resource checks, cancellation and protected-output evidence. Simulated media faults must be labeled as simulations. |
 | 5 | Secure Boot and UEFI media validation | Implement PE hashing/signature handling, DBX/SBAT checks and runtime media-validation integration. Exercise applicable signed boot components and enrolled test keys in virtual firmware. | Known signature/revocation fixtures and recorded firmware accept/reject results for each supported test configuration. Separate emulated firmware results from physical firmware acceptance. |
@@ -146,7 +153,8 @@ preparation completes before entering the common disk writer. DragonOS's actual
 Casper root overlay passed marker-file write/reboot/read tests through BIOS and
 UEFI in private VM overlays. Native FAT32 extraction now installs matching GRUB
 loaders/modules and passes DragonOS persistence reboots under BIOS and UEFI.
-ARM64 and ARM32 UEFI USB images also boot real Linux kernels in QEMU. Syslinux
+ARM64 and ARM32 UEFI USB images also pass real Casper live-root persistence
+reboots using packaged Ubuntu Base/Casper fixtures in QEMU. Syslinux
 extraction now rebuilds conventional Casper/Debian menus with a coherent native
 Syslinux BIOS loader set. SeaBIOS/Syslinux and OVMF/GRUB both boot real Linux
 kernels from one generated FAT32 USB image, including multiple initrds.
@@ -163,7 +171,7 @@ root-mount checkpoint. See [PERSISTENCE.md](PERSISTENCE.md) for scope and limits
 
 | Platform | Implementation | Remaining acceptance work |
 | --- | --- | --- |
-| ARM64/ARM32 UEFI media | Kernel-header detection, correct EFI loader names, matching GRUB data; real kernel boot tests pass | Full live-distribution persistence, Secure Boot and physical boards |
+| ARM64/ARM32 UEFI media | Kernel-header detection, correct EFI loader names, matching GRUB data; real Casper fixture live-root persistence and disabled controls pass | Full ARM userspace, additional distributions, Secure Boot and physical boards |
 | Native ARM Linux host | Architecture-independent Python/GI, native capacity ioctl, ARM64 CI job added | Execute remote native ARM CI; native ARM32 GUI/storage hardware |
 | Raspberry Pi/vendor board images | Complete compressed/raw/ZIP image restoration preserves boot layout; multi-partition round trips pass | Physical board and firmware combinations |
 | Jetson Orin/Thor installer USB | Vendor ISO retained unchanged; NVIDIA overlay/repository and ARM64 loader checked, including embedded ESP | Real vendor ISO and physical target installations |

@@ -24,9 +24,8 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from rufus_linux import core, live
-from boot_smoke import firmware_paths
-from uefi_smoke import ovmf_paths
+from rufus_linux import core, grub, live
+from live_vm import LiveVM
 
 
 def archive(files):
@@ -45,8 +44,8 @@ def archive(files):
 
 HOOK = '''#!/bin/sh
 if [ "$1" = prereqs ]; then exit 0; fi
-console=/dev/ttyS0
-[ -e "${rootmnt}/dev/ttyS0" ] && console="${rootmnt}/dev/ttyS0"
+console=/dev/@CONSOLE@
+[ -e "${rootmnt}/dev/@CONSOLE@" ] && console="${rootmnt}/dev/@CONSOLE@"
 exec >"$console" 2>&1
 fail() {
     echo "RUFUS_PERSISTENCE_FAIL_$1"
@@ -103,7 +102,7 @@ def select_path(paths, explicit, preferred, prefix):
     return candidates[0]
 
 
-def instrument_initrd(initrd, root, kind, nonce, check_stage="root"):
+def instrument_initrd(initrd, root, kind, nonce, check_stage="root", console="ttyS0"):
     """Preserve vendor hooks; choose a root checkpoint or install a runtime check."""
     expanded = root / "initrd-tree"
     core.run_tool(["unmkinitramfs", str(initrd), str(expanded)])
@@ -117,9 +116,9 @@ def instrument_initrd(initrd, root, kind, nonce, check_stage="root"):
     extra = []
     if check_stage == "userspace":
         from live_userspace import initrd_files
-        hook, extra = initrd_files(kind, nonce)
+        hook, extra = initrd_files(kind, nonce, console)
     else:
-        hook = HOOK.replace("@KIND@", kind).replace("@NONCE@", nonce).encode()
+        hook = HOOK.replace("@KIND@", kind).replace("@NONCE@", nonce).replace("@CONSOLE@", console).encode()
     call = f'/{hook_path} "$@"\n'.encode()
     # Casper's existing checks stop before vendor user/desktop customization.
     # Debian's later checkpoint runs all original init-bottom scripts first.
@@ -131,7 +130,7 @@ def instrument_initrd(initrd, root, kind, nonce, check_stage="root"):
     shutil.rmtree(expanded)
 
 
-def instrument_config(text, kind):
+def instrument_config(text, kind, console="ttyS0"):
     if kind == "casper":
         # Plymouth's graphical handoff can wait indefinitely in a headless VM.
         # Keep the distribution's scripts, using its ordinary text boot path.
@@ -141,7 +140,7 @@ def instrument_config(text, kind):
     boot = "boot=casper" if kind == "casper" else "boot=live"
     # ip=frommedia is understood by Casper, but generic initramfs-tools later
     # treats it as a network request and waits forever in our NIC-free guest.
-    flags = "console=ttyS0,115200 panic=-1"
+    flags = f"console={console},115200 panic=-1"
     # Generated GRUB entries quote every word; source GRUB/Syslinux use bare words.
     quoted = '"' + boot + '"'
     count = text.count(quoted)
@@ -151,6 +150,25 @@ def instrument_config(text, kind):
     text = re.sub(r"(?mi)^\s*set\s+timeout=.*$", "set timeout=0", text)
     text = re.sub(r"(?mi)^\s*timeout\s+\d+.*$", "TIMEOUT 1", text)
     return text, count + bare
+
+
+def disable_persistence(text, kind):
+    """Change only standalone live-kernel persistence options in a test copy."""
+    option = "persistent" if kind == "casper" else "persistence"
+    return "".join(re.sub(r'(?<![^\s"])' + option + r'(?=["\s]|$)', "no" + option, line)
+                   if re.match(r"^\s*(?:linux(?:efi|16)?|append)\s", line, re.I) else line
+                   for line in text.splitlines(keepends=True))
+
+
+def remap_image(source, destination, mappings, layout):
+    if layout == "extract":
+        shutil.copyfile(source, destination)
+        for local, path in mappings:
+            core.run_tool(["mcopy", "-o", "-i", f"{destination}@@{live.MIB}", str(local), "::" + path])
+    else:
+        mapping_args = [word for local, path in mappings for word in ("-map", str(local), path)]
+        core.run_tool(live.iso_command(source, "-outdev", str(destination), *mapping_args,
+                                      "-boot_image", "any", "replay", "-end"))
 
 
 def main():
@@ -166,6 +184,8 @@ def main():
                         help="root-mount checkpoint, or full systemd startup and a live user's PAM session")
     parser.add_argument("--timeout", type=int, help="seconds per boot (root: 240, userspace: 600)")
     parser.add_argument("--firmware", choices=("direct", "bios", "uefi", "all"), default="direct")
+    parser.add_argument("--firmware-code", type=Path, help="optional matching UEFI firmware code")
+    parser.add_argument("--firmware-vars", type=Path, help="optional matching UEFI variable template")
     parser.add_argument("--layout", choices=("hybrid", "extract"), default="hybrid")
     parser.add_argument("--bootloader", choices=("auto", "grub", "syslinux"), default="auto")
     args = parser.parse_args()
@@ -175,10 +195,9 @@ def main():
         parser.error("--timeout must be positive")
     if args.layout != "extract" and args.bootloader != "auto":
         parser.error("--bootloader requires --layout extract")
-    qemu, qemu_img = shutil.which("qemu-system-x86_64"), shutil.which("qemu-img")
-    if not qemu or not qemu_img:
-        raise RuntimeError("Install qemu-system-x86 and qemu-utils for the live reboot test.")
-    bios, firmware = firmware_paths(qemu)
+    qemu_img = shutil.which("qemu-img")
+    if not qemu_img:
+        raise RuntimeError("Install qemu-utils for the live reboot test.")
     root = args.output_dir.resolve()
     root.mkdir(parents=True, exist_ok=False)
     args.iso = args.iso.resolve()
@@ -191,6 +210,11 @@ def main():
     prefix = "/casper/" if kind == "casper" else "/live/"
     args.kernel_path = select_path(paths, args.kernel_path, [prefix + "vmlinuz"], prefix + "vmlinuz")
     args.initrd_path = select_path(paths, args.initrd_path, [prefix + "initrd.gz", prefix + "initrd.img", prefix + "initrd"], prefix + "initrd")
+    kernel, initrd = root / "vmlinuz", root / "test-initrd"
+    core.run_tool(live.iso_command(args.iso, "-osirrox", "on", "-extract", args.kernel_path, str(kernel),
+                                   "-extract", args.initrd_path, str(initrd)))
+    vm = LiveVM(grub.kernel_architecture(kernel), firmware_code=args.firmware_code, firmware_vars=args.firmware_vars)
+    modes = vm.modes(args.firmware)
     prepared = args.prepared.resolve() if args.prepared else root / "live.img"
     if not args.prepared:
         if args.layout == "extract":
@@ -199,9 +223,6 @@ def main():
         else:
             live.create_live_image(args.iso, prepared, 256 * live.MIB)
     prepared_hash = core.checksum(prepared)
-    kernel, initrd = root / "vmlinuz", root / "test-initrd"
-    core.run_tool(live.iso_command(args.iso.resolve(), "-osirrox", "on", "-extract", args.kernel_path, str(kernel),
-                                   "-extract", args.initrd_path, str(initrd)))
     original_initrd_hash = core.checksum(initrd)
     initrd_paths = [args.initrd_path]
     for path in paths:
@@ -212,8 +233,7 @@ def main():
                 initrd_paths.append(path)
             alias.unlink()
     nonce = secrets.token_hex(16)
-    instrument_initrd(initrd, root, kind, nonce, args.check_stage)
-    modes = ("bios", "uefi") if args.firmware == "all" else (args.firmware,)
+    instrument_initrd(initrd, root, kind, nonce, args.check_stage, vm.console)
     backing = prepared
     if args.firmware != "direct":
         mappings = []
@@ -233,13 +253,14 @@ def main():
                 core.run_tool(["mcopy", "-i", f"{prepared}@@{live.MIB}", "::" + path, str(config)])
             else:
                 core.run_tool(live.iso_command(prepared, "-osirrox", "on", "-extract", path, str(config)))
-            text, number = instrument_config(config.read_text(), kind)
+            text, number = instrument_config(config.read_text(), kind, vm.console)
             count += number
             if path.startswith(("/isolinux/", "/syslinux/")) or path.endswith("syslinux.cfg"):
                 text = "SERIAL 0 115200\n" + text
             else:
-                text = ("serial --unit=0 --speed=115200\nterminal_input serial\nterminal_output serial\n"
-                        "set timeout=0\nset timeout_style=hidden\n" + text)
+                # ARM firmware exposes its PL011 console to GRUB; x86 uses UART0.
+                serial = "" if vm.arm else "serial --unit=0 --speed=115200\nterminal_input serial\nterminal_output serial\n"
+                text = serial + "set timeout=0\nset timeout_style=hidden\n" + text
             config.chmod(0o600)
             config.write_text(text)
             mappings.append((config, path))
@@ -247,14 +268,7 @@ def main():
             raise RuntimeError("Firmware harness found no live kernel entries.")
         mappings.extend((initrd, path) for path in initrd_paths)
         backing = root / "firmware-test.img"
-        if args.layout == "extract":
-            shutil.copyfile(prepared, backing)
-            for local, path in mappings:
-                core.run_tool(["mcopy", "-o", "-i", f"{backing}@@{live.MIB}", str(local), "::" + path])
-        else:
-            mapping_args = [word for local, path in mappings for word in ("-map", str(local), path)]
-            core.run_tool(live.iso_command(prepared, "-outdev", str(backing), *mapping_args,
-                                          "-boot_image", "any", "replay", "-end"))
+        remap_image(prepared, backing, mappings, args.layout)
     backing_hash = core.checksum(backing)
     # Keep provenance even if a guest hangs or fails before result.json exists.
     inputs = {"iso": str(args.iso), "prepared": str(prepared), "backing": str(backing), "kind": kind,
@@ -262,35 +276,21 @@ def main():
               "kernel_sha256": core.checksum(kernel), "test_initrd_sha256": core.checksum(initrd),
               "layout": args.layout, "bootloader": args.bootloader, "marker_nonce": nonce,
               "initrd_paths": initrd_paths, "check_stage": args.check_stage,
-              "vm_architecture": "x86_64", "acceleration": "tcg", "network": "none"}
+              "vm_architecture": vm.architecture, "serial_console": vm.console,
+              "acceleration": "tcg", "network": "none", "firmware": vm.firmware_evidence}
     (root / "inputs.json").write_text(json.dumps(inputs, indent=2) + "\n")
     userspace_results = {}
     for mode in modes:
         overlay = root / f"{mode}-persistence.qcow2"
         core.run_tool([qemu_img, "create", "-f", "qcow2", "-F", "raw", "-b", str(backing), str(overlay)])
-        if mode == "uefi":
-            code, variables = ovmf_paths(qemu)
-            nvram = root / "uefi-vars.fd"
-            shutil.copyfile(variables, nvram)
-            machine = "q35,accel=tcg"
-            boot_args = ["-drive", "if=pflash,format=raw,readonly=on,file=" + str(code).replace(",", ",,"),
-                         "-drive", "if=pflash,format=raw,file=" + str(nvram).replace(",", ",,")]
-        else:
-            machine, boot_args = "pc,accel=tcg", ["-bios", str(bios)]
-            if mode == "direct":
-                boot = "boot=casper persistent" if kind == "casper" else "boot=live persistence"
-                boot_args += ["-kernel", str(kernel), "-initrd", str(initrd), "-append",
-                              boot + " console=ttyS0,115200 fsck.mode=skip panic=-1"]
+        command = vm.command(mode, overlay, root, kernel, initrd, kind)
+        (root / f"{mode}-command.json").write_text(json.dumps(command, indent=2) + "\n")
+        (root / "inputs.json").write_text(json.dumps(inputs, indent=2) + "\n")
         marker_prefix = "RUFUS_USERSPACE" if args.check_stage == "userspace" else "RUFUS_PERSISTENCE"
         for number, label in ((1, "FIRST"), (2, "SECOND")):
             expected = f"{marker_prefix}_{label}_BOOT_OK".encode()
             print(f"Booting real {kind} live root via USB/{mode}, pass {number}", flush=True)
             log = root / f"{mode}-boot-{number}.log"
-            command = [qemu, "-machine", machine, "-cpu", "max", "-m", "2048", "-smp", "2", "-nodefaults", "-nic", "none",
-                       "-display", "none", "-serial", "stdio", "-monitor", "none", "-no-reboot",
-                       "-L", str(firmware), "-device", "VGA,romfile=" + str(bios.parent / "vgabios-stdvga.bin"),
-                       *boot_args, "-device", "qemu-xhci", "-drive", "if=none,id=stick,format=qcow2,file=" + str(overlay).replace(",", ",,"),
-                       "-device", "usb-storage,drive=stick,bootindex=1"]
             with log.open("xb") as stream:
                 try:
                     result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=stream, stderr=subprocess.STDOUT,
@@ -307,22 +307,36 @@ def main():
                 (root / "userspace-boots.json").write_text(json.dumps(userspace_results, indent=2) + "\n")
             print(f"PASS: {mode}: {expected.decode()}", flush=True)
     if args.negative_control:
+        control_backing = backing
+        control_mode = "uefi" if vm.arm else "direct"
+        if vm.arm:
+            negative_mappings = []
+            for index, (local, path) in enumerate(mappings):
+                if path not in configs:
+                    continue
+                config = root / f"disabled-{index}.cfg"
+                config.write_text(disable_persistence(local.read_text(), kind))
+                negative_mappings.append((config, path))
+            control_backing = root / "without-persistence.img"
+            remap_image(backing, control_backing, negative_mappings, args.layout)
+        control_hash = core.checksum(control_backing)
         overlay = root / "without-persistence.qcow2"
-        core.run_tool([qemu_img, "create", "-f", "qcow2", "-F", "raw", "-b", str(backing), str(overlay)])
-        boot = "boot=casper nopersistent" if kind == "casper" else "boot=live nopersistence"
+        core.run_tool([qemu_img, "create", "-f", "qcow2", "-F", "raw", "-b", str(control_backing), str(overlay)])
         log = root / "without-persistence.log"
-        command = [qemu, "-machine", "pc,accel=tcg", "-cpu", "max", "-m", "2048", "-smp", "2",
-                   "-nodefaults", "-nic", "none", "-display", "none", "-serial", "stdio", "-monitor", "none",
-                   "-no-reboot", "-L", str(firmware), "-bios", str(bios), "-kernel", str(kernel), "-initrd", str(initrd),
-                   "-append", boot + " console=ttyS0,115200 panic=-1",
-                   "-device", "qemu-xhci", "-drive", "if=none,id=stick,format=qcow2,file=" + str(overlay).replace(",", ",,"),
-                   "-device", "usb-storage,drive=stick"]
+        command = vm.command(control_mode, overlay, root, kernel, initrd, kind, persistent=False,
+                             nvram_name="without-persistence-vars.fd")
+        inputs["negative_control_backing"] = str(control_backing)
+        inputs["negative_control_backing_sha256"] = control_hash
+        (root / "without-persistence-command.json").write_text(json.dumps(command, indent=2) + "\n")
+        (root / "inputs.json").write_text(json.dumps(inputs, indent=2) + "\n")
         with log.open("xb") as stream:
             result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=stream, stderr=subprocess.STDOUT,
                                     timeout=args.timeout, env={**os.environ, "TMPDIR": str(root)})
         data = log.read_bytes()
         if result.returncode or b"RUFUS_PERSISTENCE_FAIL_NO_EXT4_STORE" not in data or b"_BOOT_OK" in data:
             raise AssertionError(f"Disabled-persistence control did not fail as expected; inspect {log}")
+        if core.checksum(control_backing) != control_hash:
+            raise AssertionError("The disabled-persistence backing image changed during the test.")
         print("PASS: disabled persistence cannot satisfy the live-root check", flush=True)
     if core.checksum(args.iso) != source_hash or core.checksum(prepared) != prepared_hash or core.checksum(backing) != backing_hash:
         raise AssertionError("A read-only source/prepared/backing image changed during the test.")
@@ -331,6 +345,7 @@ def main():
                   ("before-casper-bottom" if kind == "casper" else "after-init-bottom"),
               "userspace": userspace_results, "boots": 2 * len(modes) + int(args.negative_control),
               "negative_control": "passed" if args.negative_control else "not run",
+              "negative_control_boot_method": control_mode if args.negative_control else None,
               "persistence": "passed", "boot_method": modes,
               "physical_storage_used": False, "source_images_modified": False}
     (root / "result.json").write_text(json.dumps(result, indent=2) + "\n")

@@ -9,10 +9,10 @@ import tempfile
 from rufus_linux import core, live
 
 
-def initrd_files(kind, nonce):
+def initrd_files(kind, nonce, console="ttyS0"):
     fixtures = Path(__file__).parent / "fixtures"
     def content(name):
-        return (fixtures / name).read_text().replace("@KIND@", kind).replace("@NONCE@", nonce).encode()
+        return (fixtures / name).read_text().replace("@KIND@", kind).replace("@NONCE@", nonce).replace("@CONSOLE@", console).encode()
     files = [("rufus-userspace", b"", stat.S_IFDIR | 0o755)]
     files += [("rufus-userspace/" + name, content(name), stat.S_IFREG | 0o755)
               for name in ("live-userspace-check.sh", "live-session-check.sh")]

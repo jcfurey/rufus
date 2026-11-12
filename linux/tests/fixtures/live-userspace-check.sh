@@ -1,6 +1,6 @@
 #!/bin/sh
 # Runs under the real distribution's systemd, after its normal live setup.
-exec >/dev/ttyS0 2>&1
+exec >/dev/@CONSOLE@ 2>&1
 fail() {
     echo "RUFUS_USERSPACE_FAIL_$1"
     systemctl --failed --no-pager

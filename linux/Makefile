@@ -7,6 +7,7 @@ LIVE_OUTPUT ?= build/live-reboot-test
 LIVE_LAYOUT ?= hybrid
 LIVE_BOOTLOADER ?= auto
 LIVE_KIND ?= auto
+LIVE_ROOT_TIMEOUT ?= 240
 LIVE_USERSPACE_TIMEOUT ?= 600
 SYSLINUX_KERNEL ?=
 SYSLINUX_OUTPUT ?= build/syslinux-boot-test
@@ -51,7 +52,7 @@ uefi-test:
 	$(PYTHON) tests/uefi_smoke.py
 
 live-test:
-	$(PYTHON) tests/live_smoke.py "$(LIVE_ISO)" --output-dir "$(LIVE_OUTPUT)" --firmware all --layout "$(LIVE_LAYOUT)" --bootloader "$(LIVE_BOOTLOADER)" --kind "$(LIVE_KIND)" --negative-control
+	$(PYTHON) tests/live_smoke.py "$(LIVE_ISO)" --output-dir "$(LIVE_OUTPUT)" --firmware all --layout "$(LIVE_LAYOUT)" --bootloader "$(LIVE_BOOTLOADER)" --kind "$(LIVE_KIND)" --negative-control --timeout "$(LIVE_ROOT_TIMEOUT)"
 
 live-userspace-test:
 	$(PYTHON) tests/live_smoke.py "$(LIVE_ISO)" --output-dir "$(LIVE_OUTPUT)" --firmware all --layout "$(LIVE_LAYOUT)" --bootloader "$(LIVE_BOOTLOADER)" --kind "$(LIVE_KIND)" --check-stage userspace --negative-control --timeout "$(LIVE_USERSPACE_TIMEOUT)"

@@ -232,5 +232,9 @@ python3 linux/tests/arm_smoke.py --architecture arm64 \
 
 For ARM32, use `--architecture arm`, an ARM32 kernel/BusyBox, and
 `AAVMF32_CODE.fd`/`AAVMF32_VARS.fd`. Output directories must be new. These tests
-establish firmware-to-kernel handoff, not full ARM live-distribution persistence
-or board-specific firmware compatibility.
+establish firmware-to-kernel handoff. The separate
+[ARM live-root tests](ARM_LIVE_TESTS.md) now pass Casper write/reboot/read and
+disabled-persistence controls on ARM32 and ARM64 through UEFI USB boot. They use
+locally assembled Ubuntu Base/Casper fixtures and stop before user customization.
+ARM userspace sessions, native ARM host CI and board-specific compatibility
+remain separate acceptance work.

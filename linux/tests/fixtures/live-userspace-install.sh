@@ -1,7 +1,7 @@
 #!/bin/sh
 # Appended after the distribution's original init-bottom hooks, only in test copies.
 if [ "$1" = prereqs ]; then exit 0; fi
-exec >/dev/ttyS0 2>&1
+exec >/dev/@CONSOLE@ 2>&1
 fail() {
     echo "RUFUS_PERSISTENCE_FAIL_$1"
     cat /proc/mounts
@@ -28,7 +28,7 @@ fi
 mkdir -p /run/rufus-userspace /run/systemd/system/multi-user.target.wants || fail INSTALL
 # Give the harness sole ownership of this serial port. A concurrent getty's
 # vhangup would invalidate the checker's output descriptor and hide results.
-ln -s /dev/null /run/systemd/system/serial-getty@ttyS0.service || fail INSTALL
+ln -s /dev/null /run/systemd/system/serial-getty@@CONSOLE@.service || fail INSTALL
 cp /rufus-userspace/* /run/rufus-userspace/ || fail INSTALL
 printf '%s\n' "${upper#"$store"}" >/run/rufus-userspace/upper
 cat >/run/systemd/system/rufus-userspace.service <<'EOF'
@@ -41,7 +41,7 @@ ExecStart=/bin/sh /run/rufus-userspace/live-userspace-check.sh
 StandardInput=tty
 StandardOutput=tty
 StandardError=tty
-TTYPath=/dev/ttyS0
+TTYPath=/dev/@CONSOLE@
 Environment=SYSTEMD_COLORS=0 SYSTEMD_URLIFY=0 TERM=dumb
 EOF
 ln -s ../rufus-userspace.service /run/systemd/system/multi-user.target.wants/rufus-userspace.service || fail INSTALL

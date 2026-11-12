@@ -548,6 +548,25 @@ persistence implementation and boot testing remain on the parity checklist.
 
 This establishes terminal-session startup and user-file persistence on the
 tested x86 media. DragonOS still emits vendor customization and shutdown
-warnings; graphical desktop interaction, ARM live-root persistence, Secure Boot
+warnings; graphical desktop interaction, ARM userspace sessions, Secure Boot
 and physical hardware remain additional acceptance work. Exact fixtures,
 warnings and results are recorded in [PERSISTENCE.md](PERSISTENCE.md).
+
+### ARM live-root validation update, 2026-11-12
+
+- All 234 automated tests pass; standalone and Debian packages build.
+- ARM32 and ARM64 Ubuntu Base/Casper fixtures pass four UEFI USB persistence
+  boots and two UEFI disabled-persistence controls through the normal FAT32
+  extraction backend. Source/prepared/backing hashes remain unchanged.
+- The offline fixture builder configures matching Ubuntu packages and generates
+  initramfs/SquashFS inside disposable ARM VMs, preserving native ownership.
+  Base signatures, signed package indexes, exact inputs and output hashes are
+  recorded. Neither builder nor acceptance guests have a network interface.
+- The shared harness's x86 regression passes four Debian BIOS/UEFI terminal
+  sessions with systemd `running`, independent ext4 content/owner checks, and a
+  disabled-persistence control.
+
+ARM acceptance reaches Casper's real live root before user customization;
+full ARM userspace, native ARM host CI, Secure Boot and physical USB/board tests
+remain separate. See [ARM_LIVE_TESTS.md](ARM_LIVE_TESTS.md) for reproduction,
+fixture warnings and the audited result index.

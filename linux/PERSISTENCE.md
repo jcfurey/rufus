@@ -144,8 +144,8 @@ userspace/desktop startup. Debian also runs its original init-bottom scripts;
 Casper's later vendor customization is outside its root-mount checkpoint.
 These results establish live-root persistence. The userspace checkpoint above
 adds a separate acceptance stage for normal startup and live-user files.
-Physical USB reliability, Secure Boot compatibility and full ARM live-root
-persistence remain separate from these x86 VM checks.
+Physical USB reliability and Secure Boot compatibility remain separate work.
+The ARM root-mount results are recorded below and in [ARM_LIVE_TESTS.md](ARM_LIVE_TESTS.md).
 
 ## Userspace results, 2026-11-12
 
@@ -211,8 +211,32 @@ These runs use x86-64 QEMU 10.2.1 (`1:10.2.1+ds-1ubuntu3.3`), software TCG,
 `ovmf-generic 2025.11-3ubuntu7.3`, with private writable firmware variables.
 Only virtual USB image files are attached; no network or physical storage is
 passed through. This acceptance covers terminal sessions. Graphical desktop
-interaction, Secure Boot, full ARM live-root persistence and physical USB
+interaction, Secure Boot, ARM userspace sessions and physical USB
 acceptance remain separate work.
+
+## ARM live-root results, 2026-11-12
+
+Locally assembled Ubuntu Base 26.04.1 ARM32/ARM64 fixtures with Ubuntu Casper
+26.04.2 and matching Linux 7.0.0-14 kernels/modules pass the root-mount checkpoint.
+The ordinary Rufus extraction backend produces GPT/FAT32 USB images with the
+correct GRUB EFI loader and ext4 `writable` partition. Both architectures pass
+write/reboot/read: four positive UEFI boots in total. Two separate UEFI controls
+with persistence disabled fail specifically with `NO_EXT4_STORE`. All input
+and backing-image hashes remain unchanged.
+
+The harness detects guest architecture from the kernel header and selects the
+matching QEMU machine, firmware and serial console. `--firmware all` selects
+UEFI on ARM; ARM BIOS/direct-kernel modes are refused. ARM controls use a
+private copy with persistence disabled and fresh firmware variables, preserving
+the UEFI path even for EFI zboot kernels. The existing x86 direct-kernel control
+is retained.
+
+These tests run Ubuntu's real Casper overlay logic against its packaged
+userspace. They are custom fixtures, not official live ISOs, and stop before
+Casper user setup. They do not establish complete ARM userspace sessions,
+native ARM host execution, Secure Boot or physical-board behavior. Exact signed
+inputs, versions, warnings, commands and acceptance artifact locations are in
+[ARM_LIVE_TESTS.md](ARM_LIVE_TESTS.md).
 
 References: [Debian live images](https://cdimage.debian.org/debian-cd/current-live/amd64/iso-hybrid/),
 [Debian persistence documentation](https://live-team.pages.debian.net/live-manual/html/live-manual/customizing-run-time-behaviours.en.html),
